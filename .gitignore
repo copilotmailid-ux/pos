@@ -1,0 +1,29 @@
+# Build and Distribution folders
+dist-desktop/
+dist/
+client/dist/
+
+# Dependency folders
+node_modules/
+**/node_modules/
+
+# Lock files
+package-lock.json
+**/package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Environmental secrets
+.env
+server/.env
+.env.local
+.env.*.local
+
+# Logs and system cache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+.cache/
+.DS_Store
+Thumbs.db

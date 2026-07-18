@@ -1,0 +1,31 @@
+{
+  "name": "supermart-desktop-pos",
+  "version": "1.0.0",
+  "description": "SuperMart Supermarket Billing POS Desktop Software",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:client": "cd client && npm run build",
+    "pack": "npm run build:client && electron-packager . \"SuperMart POS\" --platform=win32 --arch=x64 --out=dist-desktop --overwrite --asar"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0",
+    "electron-packager": "^17.1.2"
+  },
+  "build": {
+    "appId": "com.supermart.pos",
+    "productName": "SuperMart POS",
+    "files": [
+      "main.js",
+      "server/**/*",
+      "client/dist/**/*"
+    ],
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

@@ -77,7 +77,7 @@ const Sidebar = ({ isOpen, onClose }) => {
             </div>
             <div className="sidebar-user-info">
               <p>{user?.name || 'Admin'}</p>
-              <span>{user?.email}</span>
+              <span>{user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'Administrator'}</span>
             </div>
           </div>
           <button onClick={handleLogout} className="sidebar-logout">

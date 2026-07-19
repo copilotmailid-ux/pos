@@ -4,7 +4,6 @@ const path = require('path');
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const User = require('../models/User');
 const Product = require('../models/Product');
 const Customer = require('../models/Customer');
 const Sale = require('../models/Sale');
@@ -16,20 +15,10 @@ const seedData = async () => {
     console.log('MongoDB Connected for seeding POS workspace data...');
 
     // Clear existing data
-    await User.deleteMany({});
     await Product.deleteMany({});
     await Customer.deleteMany({});
     await Sale.deleteMany({});
     await SaleItem.deleteMany({});
-
-    // 1. Create admin login user
-    const admin = await User.create({
-      name: 'Admin',
-      email: 'admin@supermart.com',
-      password: 'admin123',
-      role: 'admin',
-    });
-    console.log(`Admin created: ${admin.email} / admin123`);
 
     // 2. Create customer registry profiles (for testing POS autocomplete)
     const customers = [
@@ -179,7 +168,7 @@ const seedData = async () => {
     console.log(`2 test sales invoices successfully generated today.`);
 
     console.log('\n--- Seeding Process Completed Successfully ---');
-    console.log('Credentials: admin@supermart.com / admin123');
+    console.log('Unlock Passcode: admin123');
     process.exit(0);
   } catch (error) {
     console.error('Seeding critical failure:', error.message);

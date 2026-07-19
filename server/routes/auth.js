@@ -1,44 +1,31 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const router = express.Router();
 const { protect } = require('../middleware/auth');
 
-const router = express.Router();
-
-// Generate JWT
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-};
-
 // @route   POST /api/auth/login
-// @desc    Login admin user
+// @desc    Login using admin passcode only (no email required)
 // @access  Public
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Please provide email and password' });
+    if (!password) {
+      return res.status(400).json({ message: 'Please provide passcode' });
     }
 
-    const user = await User.findOne({ email });
+    // Retrieve custom admin password if set (fallback to 'admin123')
+    const expectedPassword = process.env.ADMIN_DELETE_PASSWORD || 'admin123';
 
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+    if (password !== expectedPassword) {
+      return res.status(401).json({ message: 'Incorrect passcode!' });
     }
 
-    const isMatch = await user.matchPassword(password);
-
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid email or password' });
-    }
-
+    // Return mock admin login payload with session token
     res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      token: generateToken(user._id),
+      _id: 'admin_id',
+      name: 'Admin',
+      role: 'admin',
+      token: 'supermart-session-active',
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -46,14 +33,13 @@ router.post('/login', async (req, res) => {
 });
 
 // @route   GET /api/auth/me
-// @desc    Get current logged-in user
+// @desc    Get current user session
 // @access  Private
 router.get('/me', protect, async (req, res) => {
   res.json({
-    _id: req.user._id,
-    name: req.user.name,
-    email: req.user.email,
-    role: req.user.role,
+    _id: 'admin_id',
+    name: 'Admin',
+    role: 'admin',
   });
 });
 

@@ -41,12 +41,13 @@ router.get('/:id', async (req, res) => {
 // POST create supplier
 router.post('/', async (req, res) => {
   try {
-    const { name, contactPerson, phone, email, address, gstin } = req.body;
+    const { name, supplierType, contactPerson, phone, email, address, gstin } = req.body;
     if (!name || !phone) {
       return res.status(400).json({ message: 'Supplier name and phone are required' });
     }
     const newSupplier = new Supplier({
       name,
+      supplierType: supplierType || (gstin ? 'GST' : 'Non-GST'),
       contactPerson,
       phone,
       email,
@@ -63,13 +64,14 @@ router.post('/', async (req, res) => {
 // PUT update supplier
 router.put('/:id', async (req, res) => {
   try {
-    const { name, contactPerson, phone, email, address, gstin } = req.body;
+    const { name, supplierType, contactPerson, phone, email, address, gstin } = req.body;
     const supplier = await Supplier.findById(req.params.id);
     if (!supplier) {
       return res.status(404).json({ message: 'Supplier not found' });
     }
     
     if (name) supplier.name = name;
+    if (supplierType) supplier.supplierType = supplierType;
     if (contactPerson !== undefined) supplier.contactPerson = contactPerson;
     if (phone) supplier.phone = phone;
     if (email !== undefined) supplier.email = email;

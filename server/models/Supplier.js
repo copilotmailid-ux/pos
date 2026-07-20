@@ -7,6 +7,11 @@ const supplierSchema = new mongoose.Schema(
       required: [true, 'Supplier name is required'],
       trim: true,
     },
+    supplierType: {
+      type: String,
+      enum: ['GST', 'Non-GST'],
+      default: 'GST',
+    },
     contactPerson: {
       type: String,
       trim: true,

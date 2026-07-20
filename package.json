@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "build:client": "cd client && npm run build",
-    "pack": "npm run build:client && electron-packager . \"SuperMart POS\" --platform=win32 --arch=x64 --out=dist-desktop --overwrite --asar"
+    "pack": "npm run build:client && electron-packager . \"SuperMart POS\" --platform=win32 --arch=x64 --out=dist-desktop --overwrite --asar",
+    "dist": "npm run build:client && electron-builder --win"
   },
   "devDependencies": {
     "electron": "^31.0.0",

@@ -20,7 +20,7 @@ router.get('/', async (req, res) => {
     }
     
     const purchases = await Purchase.find(query)
-      .populate('supplier', 'name phone contactPerson')
+      .populate('supplier', 'name phone contactPerson supplierType gstin')
       .sort({ createdAt: -1 });
       
     res.json(purchases);
@@ -48,7 +48,7 @@ router.get('/:id', async (req, res) => {
 // POST record new purchase
 router.post('/', async (req, res) => {
   try {
-    const { supplier, items, paymentMethod, notes, invoiceDate } = req.body;
+    const { supplier, purchaseTaxType, items, paymentMethod, notes, invoiceDate } = req.body;
     
     if (!supplier || !items || items.length === 0) {
       return res.status(400).json({ message: 'Supplier and items are required' });
@@ -59,6 +59,9 @@ router.post('/', async (req, res) => {
     if (!existingSupplier) {
       return res.status(404).json({ message: 'Supplier not found' });
     }
+
+    // Determine if this is a GST purchase based on purchaseTaxType sent from client, or fallback to supplier configuration
+    const isGstPurchase = purchaseTaxType ? (purchaseTaxType === 'GST') : (existingSupplier.supplierType === 'GST' || Boolean(existingSupplier.gstin));
 
     // Generate unique purchase number
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -80,7 +83,9 @@ router.post('/', async (req, res) => {
       const itemQty = Number(item.quantity);
       const itemPurchasePrice = Number(item.purchasePrice);
       const itemSellingPrice = Number(item.sellingPrice);
-      const itemGst = Number(item.gstRate || 12);
+      
+      // If purchase is GST purchase, use line GST rate (or product rate); if Non-GST, rate is 0%
+      const itemGst = isGstPurchase ? Number(item.gstRate !== undefined ? item.gstRate : (product.gstRate ?? 12)) : Number(item.gstRate || 0);
       
       const itemSubtotal = itemQty * itemPurchasePrice;
       const itemTax = itemSubtotal * (itemGst / 100);
@@ -102,8 +107,13 @@ router.post('/', async (req, res) => {
         total: itemTotal
       });
 
-      // Update product inventory levels, purchase price, and selling price
-      product.stock = (product.stock || 0) + itemQty;
+      // Update product inventory levels (GST Stock vs Non-GST Stock)
+      if (isGstPurchase) {
+        product.gstStock = (product.gstStock || 0) + itemQty;
+      } else {
+        product.nonGstStock = (product.nonGstStock || 0) + itemQty;
+      }
+      product.stock = (product.gstStock || 0) + (product.nonGstStock || 0);
       product.purchasePrice = itemPurchasePrice;
       product.sellingPrice = itemSellingPrice;
       await product.save();
@@ -112,6 +122,7 @@ router.post('/', async (req, res) => {
     const newPurchase = new Purchase({
       purchaseNumber,
       supplier,
+      purchaseTaxType: isGstPurchase ? 'GST' : 'Non-GST',
       items: processedItems,
       subtotal,
       tax,
@@ -132,7 +143,7 @@ router.post('/', async (req, res) => {
 // POST trigger purchase return
 router.post('/:id/return', async (req, res) => {
   try {
-    const purchase = await Purchase.findById(req.params.id);
+    const purchase = await Purchase.findById(req.params.id).populate('supplier');
     if (!purchase) {
       return res.status(404).json({ message: 'Purchase not found' });
     }
@@ -141,13 +152,20 @@ router.post('/:id/return', async (req, res) => {
       return res.status(400).json({ message: 'This purchase has already been fully returned' });
     }
 
+    const isGstPurchase = purchase.purchaseTaxType ? (purchase.purchaseTaxType === 'GST') : (purchase.supplier?.supplierType === 'GST' || Boolean(purchase.supplier?.gstin));
+
     // Process return: reduce stock of all items in this purchase
     for (const item of purchase.items) {
       const product = await Product.findById(item.product);
       if (product) {
-        // Decrease stock (do not allow negative stock if it's already sold, but let's deduct up to quantity)
-        const deductQty = Math.min(product.stock, item.quantity);
-        product.stock = Math.max(0, product.stock - deductQty);
+        if (isGstPurchase) {
+          const deductQty = Math.min(product.gstStock || 0, item.quantity);
+          product.gstStock = Math.max(0, (product.gstStock || 0) - deductQty);
+        } else {
+          const deductQty = Math.min(product.nonGstStock || 0, item.quantity);
+          product.nonGstStock = Math.max(0, (product.nonGstStock || 0) - deductQty);
+        }
+        product.stock = (product.gstStock || 0) + (product.nonGstStock || 0);
         await product.save();
       }
     }

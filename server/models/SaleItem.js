@@ -29,6 +29,16 @@ const saleItemSchema = new mongoose.Schema(
       required: true,
       min: [1, 'Quantity must be at least 1'],
     },
+    gstQuantity: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    nonGstQuantity: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     price: {
       type: Number,
       required: true,
@@ -47,6 +57,14 @@ const saleItemSchema = new mongoose.Schema(
       default: 12
     },
     taxAmount: {
+      type: Number,
+      default: 0
+    },
+    reportGstTax: {
+      type: Number,
+      default: 0
+    },
+    reportNonGstAmount: {
       type: Number,
       default: 0
     },

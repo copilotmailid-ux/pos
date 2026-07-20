@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Sale = require('../models/Sale');
+const SaleItem = require('../models/SaleItem');
 const Purchase = require('../models/Purchase');
 const Product = require('../models/Product');
 const Supplier = require('../models/Supplier');
@@ -26,7 +27,7 @@ const buildDateFilter = (startDate, endDate, dateField = 'createdAt') => {
   return filter;
 };
 
-// 1. Sales Report Endpoint
+// 1. Sales Report Endpoint (All Sales)
 router.get('/sales', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -47,14 +48,14 @@ router.get('/purchases', async (req, res) => {
     const dateFilter = buildDateFilter(startDate, endDate, 'invoiceDate');
     const filter = { ...dateFilter };
 
-    const purchases = await Purchase.find(filter).populate('supplier', 'name gstin').sort({ invoiceDate: 1 });
+    const purchases = await Purchase.find(filter).populate('supplier', 'name gstin supplierType').sort({ invoiceDate: 1 });
     res.json(purchases);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching purchase report data', error: error.message });
   }
 });
 
-// 3. GST Report Endpoint (Input tax from purchases and Output tax from sales)
+// 3. GST Report Endpoint (Lists ONLY GST-allocated stock sales & GST purchases)
 router.get('/gst', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -63,15 +64,82 @@ router.get('/gst', async (req, res) => {
     const purchasesFilter = { ...buildDateFilter(startDate, endDate, 'invoiceDate'), status: { $ne: 'Returned' } };
 
     const sales = await Sale.find(salesFilter).populate('items');
-    const purchases = await Purchase.find(purchasesFilter);
+    const purchases = await Purchase.find(purchasesFilter).populate('supplier');
 
-    res.json({ sales, purchases });
+    // Itemized GST sales: filter for items where gstQuantity > 0
+    const gstSaleLines = [];
+    for (const sale of sales) {
+      for (const item of sale.items) {
+        const effectiveGstQty = Math.max(0, (item.gstQuantity !== undefined ? item.gstQuantity : item.quantity) - (item.returnedQuantity || 0));
+        if (effectiveGstQty > 0) {
+          const itemSubtotal = item.price * effectiveGstQty;
+          const itemTax = itemSubtotal * ((item.gstRate || 12) / 100);
+          gstSaleLines.push({
+            invoiceNo: sale.invoiceNo,
+            date: sale.createdAt,
+            customerName: sale.customerName || 'Walk-in',
+            productName: item.productName,
+            variant: item.variant || '',
+            gstQuantity: effectiveGstQty,
+            price: item.price,
+            gstRate: item.gstRate || 12,
+            subtotal: itemSubtotal,
+            taxAmount: itemTax,
+            total: itemSubtotal + itemTax,
+          });
+        }
+      }
+    }
+
+    res.json({ sales, purchases, gstSaleLines });
   } catch (error) {
     res.status(500).json({ message: 'Error compiling GST report data', error: error.message });
   }
 });
 
-// 4. Stock Valuation Report Endpoint
+// 4. Non-GST Sales Report Endpoint (Lists ONLY units sold from Supplier B / Non-GST stock, including collected tax balance)
+router.get('/non-gst', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const dateFilter = buildDateFilter(startDate, endDate, 'createdAt');
+    const filter = { ...dateFilter, status: { $ne: 'Cancelled' } };
+
+    const sales = await Sale.find(filter).populate('items');
+
+    const nonGstLines = [];
+    for (const sale of sales) {
+      for (const item of sale.items) {
+        const returnedNonGstQty = Math.max(0, (item.returnedQuantity || 0) - (item.gstQuantity || 0));
+        const effectiveNonGstQty = Math.max(0, (item.nonGstQuantity || 0) - returnedNonGstQty);
+
+        if (effectiveNonGstQty > 0) {
+          const itemSubtotal = item.price * effectiveNonGstQty;
+          const collectedTax = itemSubtotal * ((item.gstRate || 12) / 100);
+          const itemTotal = itemSubtotal + collectedTax;
+
+          nonGstLines.push({
+            invoiceNo: sale.invoiceNo,
+            date: sale.createdAt,
+            customerName: sale.customerName || 'Walk-in',
+            productName: item.productName,
+            variant: item.variant || '',
+            nonGstQuantity: effectiveNonGstQty,
+            price: item.price,
+            subtotal: itemSubtotal,
+            collectedTax: collectedTax,
+            total: itemTotal,
+          });
+        }
+      }
+    }
+
+    res.json(nonGstLines);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching Non-GST sales report data', error: error.message });
+  }
+});
+
+// 5. Stock Valuation Report Endpoint (shows breakdown of GST Stock vs Non-GST Stock)
 router.get('/stock', async (req, res) => {
   try {
     const products = await Product.find({}).sort({ name: 1 });
@@ -81,7 +149,7 @@ router.get('/stock', async (req, res) => {
   }
 });
 
-// 5. Supplier Ledger Endpoint
+// 6. Supplier Ledger Endpoint
 router.get('/supplier-ledger', async (req, res) => {
   try {
     const { supplierId, startDate, endDate } = req.query;
@@ -104,7 +172,7 @@ router.get('/supplier-ledger', async (req, res) => {
   }
 });
 
-// 6. Customer Ledger Endpoint
+// 7. Customer Ledger Endpoint
 router.get('/customer-ledger', async (req, res) => {
   try {
     const { mobile, startDate, endDate } = req.query;

@@ -11,7 +11,9 @@ import {
   HiOutlineTruck,
   HiOutlineRefresh,
   HiOutlineInboxIn,
-  HiOutlineArrowLeft
+  HiOutlineArrowLeft,
+  HiOutlineDocumentText,
+  HiOutlineShieldCheck
 } from 'react-icons/hi';
 
 const gstSlabs = [0, 5, 12, 18, 28];
@@ -23,8 +25,12 @@ const Purchases = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // New Purchase Type Prompt Modal
+  const [showTypeSelectModal, setShowTypeSelectModal] = useState(false);
+
   // New Purchase Form States
   const [selectedSupplier, setSelectedSupplier] = useState('');
+  const [purchaseTaxType, setPurchaseTaxType] = useState('GST');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
   const [paymentMethod, setPaymentMethod] = useState('Cash');
   const [notes, setNotes] = useState('');
@@ -72,6 +78,22 @@ const Purchases = () => {
     window._purchaseSearchTimeout = setTimeout(() => fetchPurchases(value), 300);
   };
 
+  const handleOpenNewPurchase = () => {
+    setShowTypeSelectModal(true);
+    document.body.classList.add('modal-open');
+  };
+
+  const closeTypeSelectModal = () => {
+    setShowTypeSelectModal(false);
+    document.body.classList.remove('modal-open');
+  };
+
+  const selectPurchaseClassification = (type) => {
+    handleTaxTypeChange(type);
+    closeTypeSelectModal();
+    setActiveTab('new');
+  };
+
   // Product Search Handler (in New Purchase)
   const handleProductSearch = async (e) => {
     const query = e.target.value;
@@ -88,6 +110,20 @@ const Purchases = () => {
     }
   };
 
+  const handleTaxTypeChange = (newType) => {
+    setPurchaseTaxType(newType);
+    setPurchaseItems(prev => prev.map(item => {
+      const newGst = newType === 'Non-GST' ? 0 : (item.productDefaultGst ?? 12);
+      const qty = Number(item.quantity) || 0;
+      const price = Number(item.purchasePrice) || 0;
+      return {
+        ...item,
+        gstRate: newGst,
+        total: qty * price * (1 + (newGst / 100))
+      };
+    }));
+  };
+
   const addProductToPurchase = (prod) => {
     // Check if product already exists in item list
     const exists = purchaseItems.some(item => item.product === prod._id);
@@ -98,6 +134,11 @@ const Purchases = () => {
       return;
     }
 
+    const prodDefaultGst = prod.gstRate ?? 12;
+    const initialGst = purchaseTaxType === 'Non-GST' ? 0 : prodDefaultGst;
+    const qty = 10;
+    const price = prod.purchasePrice || 0;
+
     setPurchaseItems(prev => [
       ...prev,
       {
@@ -105,11 +146,12 @@ const Purchases = () => {
         productName: prod.name,
         variant: prod.variant || '',
         barcode: prod.barcode,
-        quantity: 10, // default start quantity
-        purchasePrice: prod.purchasePrice || 0,
+        quantity: qty, // default start quantity
+        purchasePrice: price,
         sellingPrice: prod.sellingPrice || 0,
-        gstRate: prod.gstRate ?? 12,
-        total: (prod.purchasePrice || 0) * 10 * (1 + ((prod.gstRate ?? 12) / 100))
+        productDefaultGst: prodDefaultGst,
+        gstRate: initialGst,
+        total: qty * price * (1 + (initialGst / 100))
       }
     ]);
     setProductSearch('');
@@ -124,7 +166,7 @@ const Purchases = () => {
     setPurchaseItems(prev => {
       const updated = [...prev];
       updated[index][field] = value;
-      
+
       // Calculate row total: (Quantity * PurchasePrice) * (1 + (GstRate/100))
       const qty = Number(updated[index].quantity) || 0;
       const price = Number(updated[index].purchasePrice) || 0;
@@ -139,12 +181,12 @@ const Purchases = () => {
   const calculateInvoiceTotals = () => {
     let subtotal = 0;
     let tax = 0;
-    
+
     purchaseItems.forEach(item => {
       const qty = Number(item.quantity) || 0;
       const price = Number(item.purchasePrice) || 0;
       const gst = Number(item.gstRate) || 0;
-      
+
       const itemSubtotal = qty * price;
       const itemTax = itemSubtotal * (gst / 100);
 
@@ -181,6 +223,7 @@ const Purchases = () => {
     try {
       await api.post('/purchases', {
         supplier: selectedSupplier,
+        purchaseTaxType,
         invoiceDate,
         paymentMethod,
         notes,
@@ -188,9 +231,10 @@ const Purchases = () => {
       });
 
       toast.success('Purchase recorded and stock levels incremented!');
-      
+
       // Reset form
       setSelectedSupplier('');
+      setPurchaseTaxType('GST');
       setNotes('');
       setPurchaseItems([]);
       setActiveTab('history');
@@ -222,7 +266,7 @@ const Purchases = () => {
   const handleProcessReturn = async () => {
     if (!selectedPurchase) return;
     if (!window.confirm('Are you sure you want to return this purchase? This will automatically decrease the product stock levels.')) return;
-    
+
     setReturning(true);
     try {
       await api.post(`/purchases/${selectedPurchase._id}/return`);
@@ -248,7 +292,7 @@ const Purchases = () => {
           </div>
           <div>
             {activeTab === 'history' ? (
-              <button onClick={() => setActiveTab('new')} className="btn btn--primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={handleOpenNewPurchase} className="btn btn--primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <HiOutlinePlus /> New Purchase
               </button>
             ) : (
@@ -261,15 +305,15 @@ const Purchases = () => {
 
         {/* Tab navigation */}
         <div className="tabs" style={{ display: 'flex', gap: 8, marginBottom: 20, borderBottom: '1px solid var(--slate-200)', paddingBottom: 8 }}>
-          <button 
+          <button
             onClick={() => setActiveTab('history')}
             className={`btn ${activeTab === 'history' ? 'btn--primary' : 'btn--ghost'}`}
             style={{ padding: '8px 16px', fontSize: 13, border: activeTab === 'history' ? 'none' : '1px solid var(--slate-200)' }}
           >
             <HiOutlineClipboardList /> Purchase Invoices History
           </button>
-          <button 
-            onClick={() => setActiveTab('new')}
+          <button
+            onClick={handleOpenNewPurchase}
             className={`btn ${activeTab === 'new' ? 'btn--primary' : 'btn--ghost'}`}
             style={{ padding: '8px 16px', fontSize: 13, border: activeTab === 'new' ? 'none' : '1px solid var(--slate-200)' }}
           >
@@ -343,7 +387,7 @@ const Purchases = () => {
           <form onSubmit={handlePurchaseSubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 16, alignItems: 'start' }}>
             <div className="card" style={{ padding: 16 }}>
               <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--slate-700)' }}>
-                🛒 Invoice Line Items
+                🛒 Invoice Line Items ({purchaseTaxType === 'GST' ? 'GST Purchase - Supplier A' : 'Non-GST Purchase - Supplier B'})
               </h3>
 
               {/* Product search box */}
@@ -357,52 +401,77 @@ const Purchases = () => {
                     placeholder="Search product by name or barcode to add to supply bill..."
                   />
                 </div>
-                
+
+                {/* Search Results Dropdown */}
                 {productResults.length > 0 && (
-                  <div className="search-results-dropdown" style={{ display: 'block', top: '100%', width: '100%', zIndex: 10, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }}>
-                    {productResults.map((p) => (
-                      <div 
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    zIndex: 20,
+                    background: '#fff',
+                    border: '1px solid var(--slate-200)',
+                    borderRadius: '0 0 8px 8px',
+                    boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
+                    overflow: 'hidden'
+                  }}>
+                    {productResults.map(p => (
+                      <div
                         key={p._id}
                         onClick={() => addProductToPurchase(p)}
-                        className="search-result-item"
-                        style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}
+                        style={{
+                          padding: '10px 14px',
+                          display: 'flex',
+                          justify: 'space-between',
+                          alignItems: 'center',
+                          cursor: 'pointer',
+                          borderBottom: '1px solid var(--slate-100)'
+                        }}
+                        className="hover-bg-slate-50"
                       >
-                        <div style={{ fontWeight: 600, fontSize: 13 }}>{p.name} {p.variant ? `(${p.variant})` : ''}</div>
-                        <div style={{ fontSize: 11, color: 'var(--slate-400)' }}>Barcode: {p.barcode} | Stock: {p.stock} | Selling Price: ₹{p.sellingPrice}</div>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--slate-800)' }}>{p.name} {p.variant && `(${p.variant})`}</div>
+                          <div style={{ fontSize: 11, color: 'var(--slate-500)', fontFamily: 'monospace' }}>Barcode: {p.barcode}</div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--brand-600)' }}>₹{p.purchasePrice}</div>
+                          <div style={{ fontSize: 11, color: 'var(--slate-500)' }}>Stock: GST {p.gstStock || 0} | Non-GST {p.nonGstStock || 0}</div>
+                        </div>
                       </div>
                     ))}
                   </div>
                 )}
               </div>
 
-              {/* Purchase items list table */}
-              <div className="table-wrapper" style={{ minHeight: 250, boxShadow: 'none', border: '1px solid #f1f5f9' }}>
-                <table className="data-table">
+              {/* Items Table */}
+              <div className="table-wrapper">
+                <table className="data-table" style={{ fontSize: 13 }}>
                   <thead>
                     <tr>
                       <th>Product Details</th>
-                      <th style={{ width: 100 }}>Quantity</th>
-                      <th style={{ width: 120 }}>Unit Purchase Price (₹)</th>
-                      <th style={{ width: 120 }}>Unit Selling Price (₹)</th>
-                      <th style={{ width: 100 }}>GST Slab</th>
-                      <th style={{ width: 110 }}>Row Total</th>
-                      <th style={{ width: 50 }}></th>
+                      <th style={{ width: 90 }}>Quantity</th>
+                      <th style={{ width: 110 }}>Unit Purchase Price (₹)</th>
+                      <th style={{ width: 110 }}>Unit Selling Price (₹)</th>
+                      <th style={{ width: 90 }}>GST Slab</th>
+                      <th style={{ width: 100 }}>Row Total</th>
+                      <th style={{ width: 40 }}></th>
                     </tr>
                   </thead>
                   <tbody>
                     {purchaseItems.length === 0 ? (
                       <tr>
                         <td colSpan="7" style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--slate-400)' }}>
-                          <HiOutlineInboxIn size={32} />
-                          <p style={{ marginTop: 8, fontSize: 13 }}>No products added. Search and add products above.</p>
+                          <div style={{ fontSize: 32, marginBottom: 8 }}><HiOutlineInboxIn /></div>
+                          No products added. Search and add products above.
                         </td>
                       </tr>
                     ) : (
                       purchaseItems.map((item, idx) => (
-                        <tr key={item.product}>
+                        <tr key={idx}>
                           <td>
-                            <div style={{ fontWeight: 600, fontSize: 13 }}>{item.productName}</div>
-                            <div style={{ fontSize: 11, color: 'var(--slate-400)' }}>{item.variant || 'No variant'} | {item.barcode}</div>
+                            <div style={{ fontWeight: 600, color: 'var(--slate-800)' }}>{item.productName}</div>
+                            {item.variant && <div style={{ fontSize: 11, color: 'var(--slate-400)' }}>{item.variant}</div>}
                           </td>
                           <td>
                             <input
@@ -467,10 +536,10 @@ const Purchases = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="card" style={{ padding: 14 }}>
                 <h4 style={{ fontSize: 13, fontWeight: 700, color: 'var(--slate-700)', marginBottom: 12 }}>📋 Invoice Summary</h4>
-                
+
                 <div className="form-group" style={{ marginBottom: 12 }}>
                   <label style={{ fontSize: 11, fontWeight: 650 }}>Select Supplier <span className="required">*</span></label>
-                  <select 
+                  <select
                     className="form-select"
                     value={selectedSupplier}
                     onChange={(e) => setSelectedSupplier(e.target.value)}
@@ -478,6 +547,19 @@ const Purchases = () => {
                   >
                     <option value="">Choose Supplier</option>
                     {suppliers.map(s => <option key={s._id} value={s._id}>{s.name}</option>)}
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 11, fontWeight: 650 }}>Purchase Tax Classification <span className="required">*</span></label>
+                  <select
+                    className="form-select"
+                    value={purchaseTaxType}
+                    onChange={(e) => handleTaxTypeChange(e.target.value)}
+                    style={{ width: '100%', maxWidth: '100%', fontWeight: 600, borderColor: purchaseTaxType === 'GST' ? '#16a34a' : '#d97706' }}
+                  >
+                    <option value="GST">GST Purchase (Supplier A)</option>
+                    <option value="Non-GST">Non-GST Purchase (Supplier B)</option>
                   </select>
                 </div>
 
@@ -494,7 +576,7 @@ const Purchases = () => {
 
                 <div className="form-group" style={{ marginBottom: 12 }}>
                   <label style={{ fontSize: 11, fontWeight: 650 }}>Payment Type</label>
-                  <select 
+                  <select
                     className="form-select"
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value)}
@@ -518,27 +600,22 @@ const Purchases = () => {
                 </div>
               </div>
 
-              {/* Invoice calculation values card */}
-              <div className="card" style={{ padding: 14, background: 'var(--slate-50)', border: '1px solid var(--slate-200)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--slate-500)', marginBottom: 6 }}>
+              {/* Totals & Submit */}
+              <div className="card" style={{ padding: 14 }}>
+                <div style={{ fontSize: 12, display: 'flex', justifyContent: 'space-between', marginBottom: 6, color: 'var(--slate-600)' }}>
                   <span>Subtotal:</span>
                   <span>₹{subtotal.toFixed(2)}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--slate-500)', marginBottom: 10 }}>
+                <div style={{ fontSize: 12, display: 'flex', justifyContent: 'space-between', marginBottom: 10, color: 'var(--slate-600)' }}>
                   <span>GST Amount:</span>
                   <span>₹{tax.toFixed(2)}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 800, color: 'var(--slate-800)', borderTop: '1px dashed var(--slate-300)', paddingTop: 10, marginBottom: 14 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--slate-200)', paddingTop: 10, marginBottom: 16, color: 'var(--brand-600)' }}>
                   <span>Total Amount:</span>
-                  <span style={{ color: 'var(--brand-600)' }}>₹{total.toFixed(2)}</span>
+                  <span>₹{total.toFixed(2)}</span>
                 </div>
 
-                <button 
-                  type="submit" 
-                  disabled={purchaseItems.length === 0} 
-                  className="btn btn--primary" 
-                  style={{ width: '100%', padding: '10px 14px', fontSize: 13, fontWeight: 700 }}
-                >
+                <button type="submit" className="btn btn--primary" style={{ width: '100%', justifyContent: 'center' }}>
                   ✓ Submit Purchase
                 </button>
               </div>
@@ -547,110 +624,171 @@ const Purchases = () => {
         )}
       </div>
 
-      {/* Purchase Invoice Details Modal */}
+      {/* Purchase Classification Prompt Modal */}
+      {showTypeSelectModal && createPortal(
+        <div className="modal-overlay">
+          <div className="modal-backdrop" onClick={closeTypeSelectModal} />
+          <div className="modal modal--md">
+            <div className="modal-header">
+              <h3>Select Purchase Classification</h3>
+              <button onClick={closeTypeSelectModal} className="close-btn"><HiOutlineX /></button>
+            </div>
+            <div className="modal-body" style={{ padding: '20px 24px' }}>
+              <p style={{ fontSize: 14, color: 'var(--slate-600)', marginBottom: 20 }}>
+                How would you like to record this supply purchase invoice?
+              </p>
+
+              <div style={{ display: 'grid', gap: 16 }}>
+                {/* GST Card Option */}
+                <div
+                  onClick={() => selectPurchaseClassification('GST')}
+                  style={{
+                    padding: 18,
+                    borderRadius: 12,
+                    border: '2px solid #bbf7d0',
+                    background: '#f0fdf4',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                  className="hover-card-gst"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <h4 style={{ fontSize: 15, fontWeight: 700, color: '#16a34a', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <HiOutlineShieldCheck size={20} /> GST Tax Purchase (Supplier A)
+                    </h4>
+                    <span className="badge badge--success">GST Tax Invoice</span>
+                  </div>
+                  <p style={{ fontSize: 13, color: '#15803d', margin: 0 }}>
+                    Items purchased with GST input tax invoices. Stock will be added to <strong>GST Stock</strong> quota (Product's standard GST slab applied).
+                  </p>
+                </div>
+
+                {/* Non-GST Card Option */}
+                <div
+                  onClick={() => selectPurchaseClassification('Non-GST')}
+                  style={{
+                    padding: 18,
+                    borderRadius: 12,
+                    border: '2px solid #fef3c7',
+                    background: '#fffbeb',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                  className="hover-card-nongst"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <h4 style={{ fontSize: 15, fontWeight: 700, color: '#d97706', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <HiOutlineDocumentText size={20} /> Non-GST Purchase (Supplier B)
+                    </h4>
+                    <span className="badge badge--warning">Non-GST Invoice</span>
+                  </div>
+                  <p style={{ fontSize: 13, color: '#b45309', margin: 0 }}>
+                    Items purchased without GST invoice from local/unregistered suppliers. Stock added to <strong>Non-GST Stock</strong> quota (Default GST rate set to 0%).
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer" style={{ padding: '16px 24px', borderTop: '1px solid #e2e8f0', textAlign: 'right' }}>
+              <button onClick={closeTypeSelectModal} className="btn btn--ghost">Cancel</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Invoice Supply Details Modal */}
       {detailsOpen && selectedPurchase && createPortal(
         <div className="modal-overlay">
           <div className="modal-backdrop" onClick={closeDetails} />
-          <div className="modal modal--lg animate-fade-in" style={{ width: '90%', maxWidth: '750px' }}>
+          <div className="modal modal--lg">
             <div className="modal-header">
               <h3>Invoice Supply Details</h3>
               <button onClick={closeDetails} className="close-btn"><HiOutlineX /></button>
             </div>
-            <div className="modal-body" style={{ maxHeight: '78vh', overflowY: 'auto' }}>
-              
-              {/* Header Info Block */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 20, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
+            <div className="modal-body" style={{ maxHeight: '75vh', overflowY: 'auto' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
                 <div>
-                  <span style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 650 }}>Purchase Order No:</span>
-                  <p className="font-mono font-bold" style={{ fontSize: 15, color: 'var(--brand-600)', marginTop: 2 }}>{selectedPurchase.purchaseNumber}</p>
+                  <div style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 600 }}>Purchase Order No:</div>
+                  <div style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--brand-600)', fontSize: 15 }}>{selectedPurchase.purchaseNumber}</div>
                 </div>
                 <div>
-                  <span style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 650 }}>Supplier:</span>
-                  <p style={{ fontWeight: 700, color: 'var(--slate-800)', marginTop: 2 }}>{selectedPurchase.supplier?.name || 'Deleted Supplier'}</p>
+                  <div style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 600 }}>Supplier:</div>
+                  <div style={{ fontWeight: 650, color: 'var(--slate-800)' }}>{selectedPurchase.supplier?.name || 'Deleted Supplier'}</div>
                 </div>
                 <div>
-                  <span style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 650 }}>Invoice Date:</span>
-                  <p style={{ fontWeight: 600, color: 'var(--slate-700)', marginTop: 2 }}>{new Date(selectedPurchase.invoiceDate).toLocaleDateString()}</p>
-                </div>
-                <div>
-                  <span style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 650 }}>Payment Mode:</span>
-                  <p style={{ fontWeight: 600, color: 'var(--slate-700)', marginTop: 2 }}>{selectedPurchase.paymentMethod}</p>
+                  <div style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 600 }}>Invoice Date:</div>
+                  <div>{new Date(selectedPurchase.invoiceDate).toLocaleDateString()}</div>
                 </div>
               </div>
 
-              {/* Items details table */}
-              <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--slate-800)', marginBottom: 10 }}>Supply Itemization</h4>
-              <div className="table-wrapper" style={{ boxShadow: 'none', border: '1px solid #f1f5f9', marginBottom: 20 }}>
-                <table className="data-table">
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 600 }}>Payment Mode:</div>
+                <div style={{ fontWeight: 600 }}>{selectedPurchase.paymentMethod}</div>
+              </div>
+
+              {selectedPurchase.notes && (
+                <div style={{ marginBottom: 20, padding: 12, background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 600, marginBottom: 2 }}>Notes / Remarks:</div>
+                  <div style={{ fontSize: 13, color: 'var(--slate-700)' }}>{selectedPurchase.notes}</div>
+                </div>
+              )}
+
+              <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--slate-700)', marginBottom: 10 }}>Supply Itemization</h4>
+              <div className="table-wrapper">
+                <table className="data-table" style={{ fontSize: 13 }}>
                   <thead>
                     <tr>
                       <th>Product Name</th>
                       <th>Barcode</th>
-                      <th className="text-right">Quantity</th>
-                      <th className="text-right">Purchase cost</th>
-                      <th className="text-right">GST rate</th>
+                      <th>Quantity</th>
+                      <th>Purchase Cost</th>
+                      <th>GST Rate</th>
                       <th className="text-right">Total (₹)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {selectedPurchase.items.map((item) => (
-                      <tr key={item._id}>
-                        <td>
-                          <span style={{ fontWeight: 600 }}>{item.productName}</span>
-                          {item.variant && <span style={{ fontSize: 11, color: 'var(--slate-400)', marginLeft: 6 }}>({item.variant})</span>}
+                    {selectedPurchase.items?.map((item, idx) => (
+                      <tr key={idx}>
+                        <td className="font-medium">
+                          {item.productName} {item.variant && `(${item.variant})`}
                         </td>
                         <td className="font-mono" style={{ fontSize: 12 }}>{item.barcode}</td>
-                        <td className="text-right font-medium">{item.quantity}</td>
-                        <td className="text-right">₹{item.purchasePrice.toFixed(2)}</td>
-                        <td className="text-right">{item.gstRate}%</td>
-                        <td className="text-right font-semibold">₹{item.total.toFixed(2)}</td>
+                        <td className="font-semibold">{item.quantity}</td>
+                        <td>₹{item.purchasePrice?.toFixed(2)}</td>
+                        <td>{item.gstRate ?? 12}%</td>
+                        <td className="text-right font-semibold">₹{item.total?.toFixed(2)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
 
-              {/* Totals split and note */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: 20, alignItems: 'start' }}>
-                <div style={{ background: '#f8fafc', padding: 12, borderRadius: 6, border: '1px solid #e2e8f0' }}>
-                  <span style={{ fontSize: 11, color: 'var(--slate-500)', fontWeight: 600 }}>Notes / Remarks:</span>
-                  <p style={{ fontSize: 12, color: 'var(--slate-700)', marginTop: 4, lineHeight: '1.4' }}>{selectedPurchase.notes || 'No remarks recorded for this invoice.'}</p>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--slate-500)' }}>
+              <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ width: 240 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
                     <span>Subtotal:</span>
-                    <span>₹{selectedPurchase.subtotal.toFixed(2)}</span>
+                    <span>₹{selectedPurchase.subtotal?.toFixed(2)}</span>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--slate-500)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
                     <span>GST:</span>
-                    <span>₹{selectedPurchase.tax.toFixed(2)}</span>
+                    <span>₹{selectedPurchase.tax?.toFixed(2)}</span>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 800, color: 'var(--slate-800)', borderTop: '1px solid #e2e8f0', paddingTop: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700, borderTop: '1px solid #e2e8f0', paddingTop: 6, color: 'var(--brand-600)' }}>
                     <span>Invoice Total:</span>
-                    <span>₹{selectedPurchase.total.toFixed(2)}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--slate-400)', marginTop: 4 }}>
-                    <span>Status:</span>
-                    <span className={`badge ${selectedPurchase.status === 'Received' ? 'badge--green' : 'badge--red'}`}>{selectedPurchase.status}</span>
+                    <span>₹{selectedPurchase.total?.toFixed(2)}</span>
                   </div>
                 </div>
               </div>
-
-              {/* Return trigger action row */}
-              {selectedPurchase.status === 'Received' && (
-                <div style={{ borderTop: '1px solid #f1f5f9', marginTop: 24, paddingTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
-                  <button 
-                    onClick={handleProcessReturn} 
-                    disabled={returning} 
-                    className="btn btn--danger" 
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '8px 12px' }}
-                  >
-                    <HiOutlineRefresh /> {returning ? 'Returning...' : 'Return Purchase Order & Deduct Inventory'}
+            </div>
+            <div className="modal-footer" style={{ padding: '16px 24px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                {selectedPurchase.status !== 'Returned' && (
+                  <button onClick={handleProcessReturn} disabled={returning} className="btn btn--danger" style={{ gap: 6 }}>
+                    {returning ? 'Processing Return...' : '🔄 Return Purchase Order & Deduct Inventory'}
                   </button>
-                </div>
-              )}
-
+                )}
+              </div>
+              <button onClick={closeDetails} className="btn btn--ghost">Close</button>
             </div>
           </div>
         </div>,

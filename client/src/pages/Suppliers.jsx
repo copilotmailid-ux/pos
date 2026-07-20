@@ -17,6 +17,7 @@ import {
 
 const emptyForm = {
   name: '',
+  supplierType: 'GST',
   contactPerson: '',
   phone: '',
   email: '',
@@ -71,6 +72,7 @@ const Suppliers = () => {
     setEditId(s._id);
     setForm({
       name: s.name,
+      supplierType: s.supplierType || (s.gstin ? 'GST' : 'Non-GST'),
       contactPerson: s.contactPerson || '',
       phone: s.phone,
       email: s.email || '',
@@ -101,73 +103,72 @@ const Suppliers = () => {
   };
 
   const closeDetails = () => {
+    setDetailsOpen(false);
     setDetailsSupplier(null);
     setDetailsPurchases([]);
-    setDetailsOpen(false);
     document.body.classList.remove('modal-open');
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.name || !form.phone) {
-      toast.error('Please fill in all required fields');
+      toast.error('Please fill required fields (Name, Phone)');
       return;
     }
     setSaving(true);
     try {
       if (editId) {
         await api.put(`/suppliers/${editId}`, form);
-        toast.success('Supplier details updated');
+        toast.success('Supplier profile updated!');
       } else {
         await api.post('/suppliers', form);
-        toast.success('Supplier added successfully');
+        toast.success('Supplier profile registered!');
       }
       closeModal();
       fetchSuppliers(search);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to save supplier');
+      toast.error(err.response?.data?.message || 'Error saving supplier profile');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (s, e) => {
-    e.stopPropagation(); // Avoid triggering details modal
-    if (!window.confirm(`Are you sure you want to delete supplier "${s.name}"?`)) return;
-
+    e.stopPropagation();
+    if (!window.confirm(`Are you sure you want to remove supplier "${s.name}"?`)) return;
     try {
       await api.delete(`/suppliers/${s._id}`);
-      toast.success('Supplier deleted');
+      toast.success('Supplier removed successfully');
       fetchSuppliers(search);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to delete supplier');
+      toast.error(err.response?.data?.message || 'Failed to remove supplier');
     }
   };
 
   return (
-    <>
-      <div className="animate-fade-in">
-        <div className="page-header-row">
-          <div>
-            <h1 style={{ fontSize: 26, fontWeight: 700, color: 'var(--slate-800)' }}>Suppliers</h1>
-            <p style={{ color: 'var(--slate-500)', marginTop: 4, fontSize: 14 }}>
-              Register and manage vendors and check their supply transactions.
-            </p>
-          </div>
-          <button id="add-supplier-btn" onClick={openAdd} className="btn btn--primary">
-            <HiOutlinePlus /> Add Supplier
-          </button>
+    <div className="page-container animate-fade-in">
+      <div className="page-header">
+        <div>
+          <h1>Suppliers Registry</h1>
+          <p>Manage product vendors, GST/Non-GST tax classification, and track supply invoice purchase histories.</p>
         </div>
+        <button onClick={openAdd} className="btn btn--primary">
+          <HiOutlinePlus /> Add Supplier Profile
+        </button>
+      </div>
 
-        <div className="search-bar">
-          <span className="search-icon"><HiOutlineSearch /></span>
-          <input
-            id="supplier-search"
-            type="text"
-            value={search}
-            onChange={handleSearch}
-            placeholder="Search by supplier name, contact person, phone..."
-          />
+      <div className="suppliers-layout">
+        <div className="filter-bar card">
+          <div className="search-box">
+            <HiOutlineSearch className="search-icon" />
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Search by supplier name, contact person, or phone number..."
+              value={search}
+              onChange={handleSearch}
+            />
+          </div>
         </div>
 
         <div className="card">
@@ -176,6 +177,7 @@ const Suppliers = () => {
               <thead>
                 <tr>
                   <th>Supplier Name</th>
+                  <th>Type</th>
                   <th>Contact Person</th>
                   <th>Phone Number</th>
                   <th>Email</th>
@@ -185,13 +187,18 @@ const Suppliers = () => {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>Loading suppliers...</td></tr>
+                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>Loading suppliers...</td></tr>
                 ) : suppliers.length === 0 ? (
-                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>No suppliers found</td></tr>
+                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>No suppliers registered</td></tr>
                 ) : (
                   suppliers.map((s) => (
                     <tr key={s._id} onClick={() => openDetails(s._id)} style={{ cursor: 'pointer' }} className="clickable-row">
                       <td className="font-semibold" style={{ color: 'var(--slate-800)' }}>{s.name}</td>
+                      <td>
+                        <span className={`badge ${s.supplierType === 'Non-GST' ? 'badge--warning' : 'badge--success'}`}>
+                          {s.supplierType || (s.gstin ? 'GST (A)' : 'Non-GST (B)')}
+                        </span>
+                      </td>
                       <td>{s.contactPerson || '-'}</td>
                       <td>{s.phone}</td>
                       <td>{s.email || '-'}</td>
@@ -215,13 +222,13 @@ const Suppliers = () => {
         </div>
       </div>
 
-      {/* Add/Edit Modal — Portaled to escape stacking context */}
+      {/* Add/Edit Modal */}
       {modalOpen && createPortal(
         <div className="modal-overlay">
           <div className="modal-backdrop" onClick={closeModal} />
           <div className="modal modal--md">
             <div className="modal-header">
-              <h3>{editId ? 'Edit Supplier' : 'Add New Supplier'}</h3>
+              <h3>{editId ? 'Edit Supplier Profile' : 'Add New Supplier'}</h3>
               <button onClick={closeModal} className="close-btn"><HiOutlineX /></button>
             </div>
             <form onSubmit={handleSubmit} className="modal-body">
@@ -232,11 +239,12 @@ const Suppliers = () => {
                   className="form-input"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g., ABC Distributors Ltd."
+                  placeholder="e.g., Supplier A (GST) / Supplier B (Non-GST)"
                   required
                   autoFocus
                 />
               </div>
+
               <div className="form-group">
                 <label>Contact Person</label>
                 <input
@@ -279,19 +287,19 @@ const Suppliers = () => {
                 />
               </div>
               <div className="form-group">
-                <label>GSTIN</label>
+                <label>GSTIN Number <span className="hint">(Optional for Non-GST suppliers)</span></label>
                 <input
                   type="text"
-                  className="form-input"
+                  className="form-input form-input--mono"
                   value={form.gstin}
                   onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
-                  placeholder="e.g., 07AAAAA1111A1Z1"
+                  placeholder="e.g., 22AAAAA0000A1Z5"
                 />
               </div>
-              <div className="form-actions" style={{ marginTop: 24 }}>
+              <div className="form-actions" style={{ marginTop: 20 }}>
                 <button type="button" onClick={closeModal} className="btn btn--ghost">Cancel</button>
                 <button type="submit" disabled={saving} className="btn btn--primary">
-                  {saving ? 'Saving...' : editId ? 'Update' : 'Add Supplier'}
+                  {saving ? 'Saving...' : editId ? 'Update Supplier' : 'Save Supplier'}
                 </button>
               </div>
             </form>
@@ -304,74 +312,99 @@ const Suppliers = () => {
       {detailsOpen && detailsSupplier && createPortal(
         <div className="modal-overlay">
           <div className="modal-backdrop" onClick={closeDetails} />
-          <div className="modal modal--lg animate-fade-in" style={{ width: '90%', maxWidth: '750px' }}>
+          <div className="modal modal--lg">
             <div className="modal-header">
-              <h3>Supplier Profile</h3>
+              <h3>Supplier Overview & History</h3>
               <button onClick={closeDetails} className="close-btn"><HiOutlineX /></button>
             </div>
             <div className="modal-body" style={{ maxHeight: '75vh', overflowY: 'auto' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 24, paddingBottom: 16, borderBottom: '1px solid #f1f5f9' }}>
-                <div>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-400)', fontWeight: 650, marginBottom: 4 }}><HiOutlineUserCircle /> Company</h4>
-                  <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--slate-800)' }}>{detailsSupplier.name}</p>
+              {/* Profile Card */}
+              <div style={{ background: '#f8fafc', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0', marginBottom: 24 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                  <div>
+                    <h2 style={{ fontSize: 20, fontWeight: 700, color: 'var(--slate-800)', margin: 0 }}>{detailsSupplier.name}</h2>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                      <span className={`badge ${detailsSupplier.supplierType === 'Non-GST' ? 'badge--warning' : 'badge--success'}`}>
+                        {detailsSupplier.supplierType || (detailsSupplier.gstin ? 'GST (A)' : 'Non-GST (B)')}
+                      </span>
+                      {detailsSupplier.contactPerson && (
+                        <span style={{ fontSize: 13, color: 'var(--slate-500)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <HiOutlineUserCircle /> {detailsSupplier.contactPerson}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {detailsSupplier.gstin && (
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 11, color: 'var(--slate-400)', fontWeight: 600 }}>GSTIN</div>
+                      <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: 'var(--slate-700)' }}>{detailsSupplier.gstin}</div>
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-400)', fontWeight: 650, marginBottom: 4 }}><HiOutlinePhone /> Phone</h4>
-                  <p style={{ fontSize: 14, color: 'var(--slate-700)', fontWeight: 600 }}>{detailsSupplier.phone}</p>
-                </div>
-                <div>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-400)', fontWeight: 650, marginBottom: 4 }}><HiOutlineMail /> Email</h4>
-                  <p style={{ fontSize: 14, color: 'var(--slate-700)' }}>{detailsSupplier.email || '-'}</p>
-                </div>
-                <div>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-400)', fontWeight: 650, marginBottom: 4 }}><HiOutlineIdentification /> GSTIN</h4>
-                  <p style={{ fontSize: 14, color: 'var(--slate-700)', fontWeight: 600 }}><span className="badge badge--brand">{detailsSupplier.gstin || 'None'}</span></p>
-                </div>
-                <div style={{ gridColumn: 'span 2' }}>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-400)', fontWeight: 650, marginBottom: 4 }}><HiOutlineLocationMarker /> Address</h4>
-                  <p style={{ fontSize: 14, color: 'var(--slate-700)' }}>{detailsSupplier.address || '-'}</p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, borderTop: '1px solid #cbd5e1', paddingTop: 14 }}>
+                  <div>
+                    <h4 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-400)', fontWeight: 650, marginBottom: 4 }}><HiOutlinePhone /> Phone</h4>
+                    <p style={{ fontSize: 14, color: 'var(--slate-700)', margin: 0 }}>{detailsSupplier.phone}</p>
+                  </div>
+                  <div>
+                    <h4 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-400)', fontWeight: 650, marginBottom: 4 }}><HiOutlineMail /> Email</h4>
+                    <p style={{ fontSize: 14, color: 'var(--slate-700)', margin: 0 }}>{detailsSupplier.email || '-'}</p>
+                  </div>
+                  <div>
+                    <h4 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-400)', fontWeight: 650, marginBottom: 4 }}><HiOutlineLocationMarker /> Address</h4>
+                    <p style={{ fontSize: 14, color: 'var(--slate-700)', margin: 0 }}>{detailsSupplier.address || '-'}</p>
+                  </div>
                 </div>
               </div>
 
+              {/* Purchase History Ledger */}
               <div>
-                <h4 style={{ fontSize: 15, fontWeight: 700, color: 'var(--slate-800)', marginBottom: 12 }}>Purchase Invoices History</h4>
-                <div className="table-wrapper" style={{ boxShadow: 'none', border: '1px solid #f1f5f9' }}>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Invoice Number</th>
-                        <th>Purchase Date</th>
-                        <th>Status</th>
-                        <th>Invoice Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detailsPurchases.length === 0 ? (
-                        <tr><td colSpan="4" style={{ textAlign: 'center', padding: '20px', color: 'var(--slate-400)' }}>No past purchases registered for this supplier</td></tr>
-                      ) : (
-                        detailsPurchases.map((p) => (
+                <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--slate-800)', marginBottom: 12 }}>Supply Purchases History</h3>
+                {detailsPurchases.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '30px 20px', color: 'var(--slate-400)', border: '1px dashed #cbd5e1', borderRadius: 8 }}>
+                    No purchase history found for this supplier.
+                  </div>
+                ) : (
+                  <div className="table-wrapper">
+                    <table className="data-table" style={{ fontSize: 13 }}>
+                      <thead>
+                        <tr>
+                          <th>Purchase No</th>
+                          <th>Invoice Date</th>
+                          <th>Payment Method</th>
+                          <th>Status</th>
+                          <th className="text-right">Total Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailsPurchases.map(p => (
                           <tr key={p._id}>
-                            <td className="font-mono font-bold" style={{ color: 'var(--brand-600)' }}>{p.purchaseNumber}</td>
+                            <td className="font-mono" style={{ fontWeight: 600, color: 'var(--slate-800)' }}>{p.purchaseNumber}</td>
                             <td>{new Date(p.invoiceDate).toLocaleDateString()}</td>
+                            <td>{p.paymentMethod}</td>
                             <td>
-                              <span className={`badge ${p.status === 'Received' ? 'badge--green' : 'badge--red'}`}>
+                              <span className={`badge ${p.status === 'Received' ? 'badge--success' : 'badge--warning'}`}>
                                 {p.status}
                               </span>
                             </td>
-                            <td className="font-semibold">₹{p.total.toFixed(2)}</td>
+                            <td className="text-right font-semibold">₹{p.total.toFixed(2)}</td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
+            </div>
+            <div className="modal-footer" style={{ padding: '16px 24px', borderTop: '1px solid #e2e8f0', textAlign: 'right' }}>
+              <button onClick={closeDetails} className="btn btn--ghost">Close</button>
             </div>
           </div>
         </div>,
         document.body
       )}
-    </>
+    </div>
   );
 };
 

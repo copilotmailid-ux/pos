@@ -13,6 +13,11 @@ const purchaseSchema = new mongoose.Schema(
       ref: 'Supplier',
       required: true,
     },
+    purchaseTaxType: {
+      type: String,
+      enum: ['GST', 'Non-GST'],
+      default: 'GST',
+    },
     items: [
       {
         product: {

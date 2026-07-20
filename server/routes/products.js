@@ -48,6 +48,8 @@ router.get('/public-barcode/:code', async (req, res) => {
       category: product.category,
       sellingPrice: product.sellingPrice,
       stock: product.stock,
+      gstStock: product.gstStock || 0,
+      nonGstStock: product.nonGstStock || 0,
       gstRate: product.gstRate ?? 12
     });
   } catch (error) {
@@ -64,14 +66,14 @@ router.post('/remote-stock-in', async (req, res) => {
     return res.status(400).json({ message: 'Barcode and quantity required' });
   }
   try {
-    const product = await Product.findOneAndUpdate(
-      { barcode },
-      { $inc: { stock: Number(quantity) } },
-      { new: true }
-    );
+    const qty = Number(quantity);
+    const product = await Product.findOne({ barcode });
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
+    product.gstStock = (product.gstStock || 0) + qty;
+    product.stock = (product.gstStock || 0) + (product.nonGstStock || 0);
+    await product.save();
 
     // If a session ID was provided, signal the laptop to refresh its products list
     if (sessionId) {
@@ -81,7 +83,7 @@ router.post('/remote-stock-in', async (req, res) => {
       remoteScans[sessionId].push(barcode);
     }
 
-    res.json({ name: product.name, stock: product.stock });
+    res.json({ name: product.name, stock: product.stock, gstStock: product.gstStock });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -170,12 +172,15 @@ router.get('/:id', async (req, res) => {
 // @access  Private
 router.post('/', async (req, res) => {
   try {
-    const { name, variant, barcode, category, purchasePrice, sellingPrice, stock, gstRate } = req.body;
+    const { name, variant, barcode, category, purchasePrice, sellingPrice, stock, gstStock, nonGstStock, gstRate } = req.body;
 
     // Validate required fields
     if (!name || !category || purchasePrice === undefined || sellingPrice === undefined) {
       return res.status(400).json({ message: 'Please provide all required fields' });
     }
+
+    const gStock = gstStock !== undefined ? Number(gstStock) : Number(stock || 0);
+    const nStock = nonGstStock !== undefined ? Number(nonGstStock) : 0;
 
     const productData = {
       name,
@@ -183,7 +188,9 @@ router.post('/', async (req, res) => {
       category,
       purchasePrice,
       sellingPrice,
-      stock: stock || 0,
+      gstStock: gStock,
+      nonGstStock: nStock,
+      stock: gStock + nStock,
       gstRate: gstRate !== undefined ? Number(gstRate) : 12,
     };
 
@@ -213,7 +220,7 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    const { name, variant, barcode, category, purchasePrice, sellingPrice, stock, gstRate } = req.body;
+    const { name, variant, barcode, category, purchasePrice, sellingPrice, stock, gstStock, nonGstStock, gstRate } = req.body;
 
     product.name = name || product.name;
     product.variant = variant !== undefined ? variant : product.variant;
@@ -221,7 +228,13 @@ router.put('/:id', async (req, res) => {
     product.category = category || product.category;
     product.purchasePrice = purchasePrice !== undefined ? purchasePrice : product.purchasePrice;
     product.sellingPrice = sellingPrice !== undefined ? sellingPrice : product.sellingPrice;
-    product.stock = stock !== undefined ? stock : product.stock;
+    
+    if (gstStock !== undefined) product.gstStock = Number(gstStock);
+    if (nonGstStock !== undefined) product.nonGstStock = Number(nonGstStock);
+    if (stock !== undefined && gstStock === undefined && nonGstStock === undefined) {
+      product.gstStock = Number(stock);
+    }
+    product.stock = (product.gstStock || 0) + (product.nonGstStock || 0);
     product.gstRate = gstRate !== undefined ? Number(gstRate) : product.gstRate;
 
     const updatedProduct = await product.save();

@@ -19,7 +19,8 @@ const emptyForm = {
   category: '',
   purchasePrice: '',
   sellingPrice: '',
-  stock: '',
+  gstStock: '',
+  nonGstStock: '',
   gstRate: 12
 };
 
@@ -86,7 +87,8 @@ const Products = () => {
       category: p.category, 
       purchasePrice: p.purchasePrice, 
       sellingPrice: p.sellingPrice, 
-      stock: p.stock,
+      gstStock: p.gstStock ?? p.stock,
+      nonGstStock: p.nonGstStock ?? 0,
       gstRate: p.gstRate ?? 12 
     });
     setModalOpen(true);
@@ -96,53 +98,80 @@ const Products = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.name || !form.category || !form.purchasePrice || !form.sellingPrice) {
+    if (!form.name || !form.category || form.purchasePrice === '' || form.sellingPrice === '') {
       toast.error('Please fill all required fields'); return;
     }
     setSaving(true);
     try {
-      if (editId) { await api.put(`/products/${editId}`, form); toast.success('Product updated'); }
-      else { await api.post('/products', form); toast.success('Product added'); }
-      closeModal(); fetchProducts(search);
-    } catch (err) { toast.error(err.response?.data?.message || 'Failed to save product'); }
-    finally { setSaving(false); }
+      const payload = {
+        name: form.name,
+        variant: form.variant,
+        barcode: form.barcode || undefined,
+        category: form.category,
+        purchasePrice: Number(form.purchasePrice),
+        sellingPrice: Number(form.sellingPrice),
+        gstStock: Number(form.gstStock || 0),
+        nonGstStock: Number(form.nonGstStock || 0),
+        stock: Number(form.gstStock || 0) + Number(form.nonGstStock || 0),
+        gstRate: Number(form.gstRate)
+      };
+
+      if (editId) {
+        await api.put(`/products/${editId}`, payload);
+        toast.success('Product updated!');
+      } else {
+        await api.post('/products', payload);
+        toast.success('Product created!');
+      }
+      closeModal();
+      fetchProducts(search);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Error saving product');
+    } finally { setSaving(false); }
+  };
+
+  const closeDeleteModal = () => {
+    setDeleteModal(null);
+    setDeleteInputPassword('');
+    document.body.classList.remove('modal-open');
   };
 
   const handleDelete = async (e) => {
     e.preventDefault();
-    const savedPassword = localStorage.getItem('pos_admin_delete_pass') || 'admin123';
-    
-    if (deleteInputPassword !== savedPassword) {
-      toast.error('Incorrect Admin Password! Deletion blocked.');
+    if (!deleteInputPassword) {
+      toast.error('Admin password is required to delete product!');
       return;
     }
 
     try {
+      const savedPassword = localStorage.getItem('pos_admin_delete_pass') || 'admin123';
+      if (deleteInputPassword !== savedPassword) {
+        toast.error('Incorrect Admin Password! Delete authorization rejected.');
+        return;
+      }
+
       await api.delete(`/products/${deleteModal._id}`);
       toast.success('Product deleted successfully');
-      setDeleteModal(null);
-      setDeleteInputPassword('');
-      document.body.classList.remove('modal-open');
+      closeDeleteModal();
       fetchProducts(search);
-    } catch { 
-      toast.error('Failed to delete product'); 
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Error deleting product');
     }
   };
 
-  const handleSaveSettings = (e) => {
+  const handleUpdatePassword = (e) => {
     e.preventDefault();
     const savedPassword = localStorage.getItem('pos_admin_delete_pass') || 'admin123';
-
     if (currentPasswordInput !== savedPassword) {
-      toast.error('Current password does not match!');
+      toast.error('Current password is incorrect!');
+      return;
+    }
+    if (!newPasswordInput || newPasswordInput.length < 4) {
+      toast.error('New password must be at least 4 characters long!');
       return;
     }
     if (newPasswordInput !== confirmPasswordInput) {
       toast.error('New passwords do not match!');
-      return;
-    }
-    if (newPasswordInput.length < 4) {
-      toast.error('Password must be at least 4 characters long');
       return;
     }
 
@@ -154,47 +183,41 @@ const Products = () => {
     setConfirmPasswordInput('');
   };
 
-  const getStockClass = (stock) => {
-    if (stock < 10) return 'badge badge--red';
-    if (stock < 25) return 'badge badge--amber';
-    return 'badge badge--green';
-  };
-
-  const closeDeleteModal = () => {
-    setDeleteModal(null);
-    setDeleteInputPassword('');
-    document.body.classList.remove('modal-open');
+  const getStockClass = (st) => {
+    if (st <= 0) return 'badge badge--danger';
+    if (st < 10) return 'badge badge--warning';
+    return 'badge badge--success';
   };
 
   return (
-    <>
-      <div className="animate-fade-in">
-        <div className="page-header-row">
-          <div>
-            <h1 style={{ fontSize: 26, fontWeight: 700, color: 'var(--slate-800)' }}>Products</h1>
-            <p style={{ color: 'var(--slate-500)', marginTop: 4, fontSize: 14 }}>
-              Manage your inventory ({products.length} products). Press <kbd style={{ padding: '2px 6px', background: '#e2e8f0', borderRadius: 4, fontSize: 12, fontWeight: 'bold' }}>Ctrl + Shift + P</kbd> for settings.
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: 12 }}>
-            <button onClick={() => setSettingsOpen(true)} className="btn btn--ghost" style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--slate-300)' }}>
-              <HiOutlineCog /> Settings
-            </button>
-            <button id="add-product-btn" onClick={openAdd} className="btn btn--primary">
-              <HiOutlinePlus /> Add Product
-            </button>
-          </div>
+    <div className="page-container animate-fade-in">
+      <div className="page-header">
+        <div>
+          <h1>Products Catalog & Dual Stock Inventory</h1>
+          <p>Manage product items, price structures, GST tax rates, and GST vs Non-GST stock quotas.</p>
         </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={() => setSettingsOpen(true)} className="btn btn--outline" style={{ gap: 6 }}>
+            <HiOutlineCog size={18} /> Admin Settings
+          </button>
+          <button onClick={openAdd} className="btn btn--primary">
+            <HiOutlinePlus /> Add Product
+          </button>
+        </div>
+      </div>
 
-        <div className="search-bar">
-          <span className="search-icon"><HiOutlineSearch /></span>
-          <input
-            id="product-search"
-            type="text"
-            value={search}
-            onChange={handleSearch}
-            placeholder="Search products, barcode, category..."
-          />
+      <div className="products-layout">
+        <div className="filter-bar card">
+          <div className="search-box">
+            <HiOutlineSearch className="search-icon" />
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Search by product name, barcode, or category..."
+              value={search}
+              onChange={handleSearch}
+            />
+          </div>
         </div>
 
         <div className="card">
@@ -208,15 +231,17 @@ const Products = () => {
                   <th>Purchase Price</th>
                   <th>Selling Price</th>
                   <th>GST Rate</th>
-                  <th>Stock</th>
+                  <th>GST Stock (A)</th>
+                  <th>Non-GST Stock (B)</th>
+                  <th>Total Stock</th>
                   <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>Loading products...</td></tr>
+                  <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>Loading products...</td></tr>
                 ) : products.length === 0 ? (
-                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>No products found</td></tr>
+                  <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>No products found</td></tr>
                 ) : (
                   products.map((p) => (
                     <tr key={p._id}>
@@ -229,6 +254,8 @@ const Products = () => {
                       <td style={{ color: 'var(--slate-600)' }}>₹{p.purchasePrice.toFixed(2)}</td>
                       <td className="font-medium">₹{p.sellingPrice.toFixed(2)}</td>
                       <td style={{ color: 'var(--slate-650)' }}>{p.gstRate ?? 12}%</td>
+                      <td style={{ fontWeight: 600, color: '#16a34a' }}>{p.gstStock || 0}</td>
+                      <td style={{ fontWeight: 600, color: '#d97706' }}>{p.nonGstStock || 0}</td>
                       <td><span className={getStockClass(p.stock)}>{p.stock}</span></td>
                       <td className="text-right">
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
@@ -249,7 +276,7 @@ const Products = () => {
         </div>
       </div>
 
-      {/* Add/Edit Modal — portaled to body to escape stacking context */}
+      {/* Add/Edit Modal — portaled to body */}
       {modalOpen && createPortal(
         <div className="modal-overlay">
           <div className="modal-backdrop" onClick={closeModal} />
@@ -293,12 +320,24 @@ const Products = () => {
                     {gstSlabs.map((rate) => <option key={rate} value={rate}>{rate}% GST</option>)}
                   </select>
                 </div>
+              </div>
+              
+              <div className="form-row" style={{ marginTop: 12, padding: 12, background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
                 <div className="form-group">
-                  <label>Stock</label>
-                  <input type="number" min="0" className="form-input" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} placeholder="0" />
+                  <label style={{ color: '#16a34a', fontWeight: 650 }}>GST Stock (Supplier A)</label>
+                  <input type="number" min="0" className="form-input" value={form.gstStock} onChange={(e) => setForm({ ...form, gstStock: e.target.value })} placeholder="0" />
+                </div>
+                <div className="form-group">
+                  <label style={{ color: '#d97706', fontWeight: 650 }}>Non-GST Stock (Supplier B)</label>
+                  <input type="number" min="0" className="form-input" value={form.nonGstStock} onChange={(e) => setForm({ ...form, nonGstStock: e.target.value })} placeholder="0" />
+                </div>
+                <div className="form-group">
+                  <label style={{ fontWeight: 650 }}>Total Stock</label>
+                  <input type="number" className="form-input" value={(Number(form.gstStock || 0) + Number(form.nonGstStock || 0))} disabled style={{ background: '#f1f5f9' }} />
                 </div>
               </div>
-              <div className="form-actions">
+
+              <div className="form-actions" style={{ marginTop: 20 }}>
                 <button type="button" onClick={closeModal} className="btn btn--ghost">Cancel</button>
                 <button type="submit" disabled={saving} className="btn btn--primary">
                   {saving ? 'Saving...' : editId ? 'Update' : 'Add Product'}
@@ -310,7 +349,7 @@ const Products = () => {
         document.body
       )}
 
-      {/* Delete Confirmation Modal — portaled to body */}
+      {/* Delete Confirmation Modal */}
       {deleteModal && createPortal(
         <div className="modal-overlay">
           <div className="modal-backdrop" onClick={closeDeleteModal} />
@@ -352,36 +391,35 @@ const Products = () => {
         document.body
       )}
 
-      {/* Settings Modal — portaled to body */}
+      {/* Admin Settings Modal */}
       {settingsOpen && createPortal(
         <div className="modal-overlay">
           <div className="modal-backdrop" onClick={() => setSettingsOpen(false)} />
           <div className="modal modal--md">
             <div className="modal-header">
-              <h3>Settings: Admin Password Management</h3>
+              <h3>Admin Security Password Settings</h3>
               <button onClick={() => setSettingsOpen(false)} className="close-btn"><HiOutlineX /></button>
             </div>
-            <form onSubmit={handleSaveSettings} className="modal-body">
+            <form onSubmit={handleUpdatePassword} className="modal-body">
               <div className="form-group">
                 <label>Current Admin Password</label>
                 <input
                   type="password"
+                  className="form-input"
                   value={currentPasswordInput}
                   onChange={(e) => setCurrentPasswordInput(e.target.value)}
-                  className="form-input"
                   placeholder="Enter current password (Default: admin123)"
                   required
-                  autoFocus
                 />
               </div>
               <div className="form-group">
                 <label>New Admin Password</label>
                 <input
                   type="password"
+                  className="form-input"
                   value={newPasswordInput}
                   onChange={(e) => setNewPasswordInput(e.target.value)}
-                  className="form-input"
-                  placeholder="Min 4 characters"
+                  placeholder="Enter new password"
                   required
                 />
               </div>
@@ -389,23 +427,23 @@ const Products = () => {
                 <label>Confirm New Admin Password</label>
                 <input
                   type="password"
+                  className="form-input"
                   value={confirmPasswordInput}
                   onChange={(e) => setConfirmPasswordInput(e.target.value)}
-                  className="form-input"
-                  placeholder="Confirm new password"
+                  placeholder="Re-enter new password"
                   required
                 />
               </div>
-              <div className="form-actions" style={{ marginTop: 24 }}>
+              <div className="form-actions" style={{ marginTop: 20 }}>
                 <button type="button" onClick={() => setSettingsOpen(false)} className="btn btn--ghost">Cancel</button>
-                <button type="submit" className="btn btn--primary">Update Admin Password</button>
+                <button type="submit" className="btn btn--primary">Update Password</button>
               </div>
             </form>
           </div>
         </div>,
         document.body
       )}
-    </>
+    </div>
   );
 };
 

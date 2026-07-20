@@ -49,8 +49,9 @@ const SalesHistory = () => {
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
       const { data } = await api.get(`/sales?${params}`);
-      setSales(data.sales);
-      setTotalPages(data.pages);
+      const salesList = Array.isArray(data) ? data : (data.sales || []);
+      setSales(salesList);
+      setTotalPages(data.pages || 1);
     } catch { toast.error('Failed to load sales'); }
     finally { setLoading(false); }
   };

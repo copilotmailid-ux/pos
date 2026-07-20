@@ -34,8 +34,17 @@ const productSchema = new mongoose.Schema(
     },
     stock: {
       type: Number,
-      required: [true, 'Stock quantity is required'],
       min: [0, 'Stock cannot be negative'],
+      default: 0,
+    },
+    gstStock: {
+      type: Number,
+      min: [0, 'GST Stock cannot be negative'],
+      default: 0,
+    },
+    nonGstStock: {
+      type: Number,
+      min: [0, 'Non-GST Stock cannot be negative'],
       default: 0,
     },
     gstRate: {
@@ -47,11 +56,18 @@ const productSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Auto-generate barcode before validation if not provided
+// Keep total stock in sync with gstStock + nonGstStock before validation
 productSchema.pre('validate', function (next) {
+  if (this.isNew && (this.stock > 0) && (!this.gstStock && !this.nonGstStock)) {
+    // Default legacy/initial stock to gstStock if unspecified
+    this.gstStock = this.stock;
+  }
+  this.gstStock = Math.max(0, this.gstStock || 0);
+  this.nonGstStock = Math.max(0, this.nonGstStock || 0);
+  this.stock = this.gstStock + this.nonGstStock;
+
   if (!this.barcode) {
-    // Generate a 13-digit EAN-style barcode
-    const prefix = '200'; // Internal use prefix
+    const prefix = '200';
     const timestamp = Date.now().toString().slice(-7);
     const random = Math.floor(Math.random() * 900 + 100).toString();
     this.barcode = prefix + timestamp + random;

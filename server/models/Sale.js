@@ -37,6 +37,14 @@ const saleSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+    gstSubtotal: {
+      type: Number,
+      default: 0,
+    },
+    nonGstSubtotal: {
+      type: Number,
+      default: 0,
+    },
     taxAmount: {
       type: Number,
       default: 0,
@@ -53,6 +61,14 @@ const saleSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
+    },
+    reportGstTax: {
+      type: Number,
+      default: 0,
+    },
+    reportNonGstAmount: {
+      type: Number,
+      default: 0,
     },
     status: {
       type: String,

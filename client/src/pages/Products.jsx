@@ -9,8 +9,11 @@ import {
   HiOutlineSearch,
   HiOutlineX,
   HiOutlineCog,
-  HiOutlineLockClosed
+  HiOutlineLockClosed,
+  HiOutlineChevronLeft,
+  HiOutlineChevronRight
 } from 'react-icons/hi';
+import { useRef } from 'react';
 
 const emptyForm = {
   name: '',
@@ -37,6 +40,11 @@ const Products = () => {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
+  // Pagination states
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalProducts, setTotalProducts] = useState(0);
+
   // Password Protection States
   const [deleteInputPassword, setDeleteInputPassword] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -44,8 +52,10 @@ const Products = () => {
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
 
+  const searchTimeoutRef = useRef(null);
+
   useEffect(() => {
-    fetchProducts();
+    fetchProducts('', 1);
 
     // Hotkey handler for Ctrl + Shift + P
     const handleKeyDown = (e) => {
@@ -58,14 +68,27 @@ const Products = () => {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       document.body.classList.remove('modal-open');
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
     };
   }, []);
 
-  const fetchProducts = async (query = '') => {
+  const fetchProducts = async (query = '', pageNum = 1) => {
     try {
       setLoading(true);
-      const { data } = await api.get(`/products${query ? `?search=${query}` : ''}`);
-      setProducts(data);
+      const { data } = await api.get(`/products?search=${encodeURIComponent(query)}&page=${pageNum}&limit=15`);
+      if (data && data.products) {
+        setProducts(data.products);
+        setTotalPages(data.pages || 1);
+        setTotalProducts(data.total || 0);
+        setPage(data.page || 1);
+      } else {
+        setProducts(data || []);
+        setTotalPages(1);
+        setTotalProducts(data ? data.length : 0);
+        setPage(1);
+      }
     } catch { toast.error('Failed to load products'); }
     finally { setLoading(false); }
   };
@@ -73,8 +96,10 @@ const Products = () => {
   const handleSearch = (e) => {
     const value = e.target.value;
     setSearch(value);
-    clearTimeout(window._searchTimeout);
-    window._searchTimeout = setTimeout(() => fetchProducts(value), 300);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = setTimeout(() => fetchProducts(value, 1), 300);
   };
 
   const openAdd = () => { setEditId(null); setForm(emptyForm); setModalOpen(true); document.body.classList.add('modal-open'); };
@@ -124,7 +149,7 @@ const Products = () => {
         toast.success('Product created!');
       }
       closeModal();
-      fetchProducts(search);
+      fetchProducts(search, page);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Error saving product');
     } finally { setSaving(false); }
@@ -153,7 +178,7 @@ const Products = () => {
       await api.delete(`/products/${deleteModal._id}`);
       toast.success('Product deleted successfully');
       closeDeleteModal();
-      fetchProducts(search);
+      fetchProducts(search, page);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Error deleting product');
     }
@@ -273,6 +298,19 @@ const Products = () => {
               </tbody>
             </table>
           </div>
+          {totalPages > 1 && (
+            <div className="pagination">
+              <p>Page {page} of {totalPages} (Total: {totalProducts} products)</p>
+              <div className="pagination-btns">
+                <button type="button" onClick={() => fetchProducts(search, Math.max(1, page - 1))} disabled={page === 1} className="pagination-btn">
+                  <HiOutlineChevronLeft />
+                </button>
+                <button type="button" onClick={() => fetchProducts(search, Math.min(totalPages, page + 1))} disabled={page === totalPages} className="pagination-btn">
+                  <HiOutlineChevronRight />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

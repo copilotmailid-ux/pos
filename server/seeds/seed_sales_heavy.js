@@ -43,7 +43,16 @@ const seedHeavySales = async () => {
     const salesList = [];
     const saleItemsList = [];
     const totalSalesToSeed = 10000;
-    const batchSize = 2500; // Insert in batches to optimize memory usage
+    const batchSize = 2500;
+
+    // Build a running stock tracker to FIFO allocate gstStock vs nonGstStock across sales
+    const stockTracker = {};
+    for (const p of products) {
+      stockTracker[p._id.toString()] = {
+        gstStock: p.gstStock || 0,
+        nonGstStock: p.nonGstStock || 0
+      };
+    }
 
     console.log(`Generating ${totalSalesToSeed} sales records in-memory...`);
 
@@ -65,12 +74,43 @@ const seedHeavySales = async () => {
       for (let j = 0; j < numItems; j++) {
         // Pick a random product
         const product = products[Math.floor(Math.random() * products.length)];
+        const pid = product._id.toString();
         const qty = Math.floor(Math.random() * 3) + 1; // Quantity 1 to 3
         const itemGst = product.gstRate ?? 12;
         
+        // FIFO: Allocate from gstStock first, then nonGstStock
+        const tracker = stockTracker[pid];
+        let gstQty = 0;
+        let nonGstQty = 0;
+
+        if (tracker.gstStock >= qty) {
+          gstQty = qty;
+          tracker.gstStock -= qty;
+        } else {
+          gstQty = tracker.gstStock;
+          const remaining = qty - gstQty;
+          tracker.gstStock = 0;
+          if (tracker.nonGstStock >= remaining) {
+            nonGstQty = remaining;
+            tracker.nonGstStock -= remaining;
+          } else {
+            nonGstQty = tracker.nonGstStock;
+            tracker.nonGstStock = 0;
+            // If both exhausted, still record the sale (unlimited virtual stock for seeding)
+            // But distribute: majority to gstQty
+            const deficit = remaining - nonGstQty;
+            gstQty += Math.ceil(deficit * 0.6);
+            nonGstQty += deficit - Math.ceil(deficit * 0.6);
+          }
+        }
+
         const itemSubtotal = product.sellingPrice * qty;
         const itemTax = itemSubtotal * (itemGst / 100);
         
+        // Report-level GST tracking
+        const reportGstTax = product.sellingPrice * gstQty * (itemGst / 100);
+        const reportNonGstAmount = product.sellingPrice * nonGstQty;
+
         subtotal += itemSubtotal;
         taxAmount += itemTax;
 
@@ -85,10 +125,14 @@ const seedHeavySales = async () => {
           variant: product.variant || '',
           barcode: product.barcode,
           quantity: qty,
+          gstQuantity: gstQty,
+          nonGstQuantity: nonGstQty,
           price: product.sellingPrice,
           purchasePrice: product.purchasePrice || 0,
           gstRate: itemGst,
           taxAmount: itemTax,
+          reportGstTax: Number(reportGstTax.toFixed(2)),
+          reportNonGstAmount: Number(reportNonGstAmount.toFixed(2)),
           total: itemSubtotal + itemTax
         });
       }

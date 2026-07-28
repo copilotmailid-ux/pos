@@ -4,91 +4,6 @@ const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
-// In-memory queue for remote scans
-const remoteScans = {};
-
-// @route   POST /api/products/remote-scan
-// @desc    Receive barcode from mobile phone camera
-// @access  Public
-router.post('/remote-scan', (req, res) => {
-  const { barcode, sessionId } = req.body;
-  if (!barcode || !sessionId) {
-    return res.status(400).json({ message: 'Barcode and sessionId required' });
-  }
-  if (!remoteScans[sessionId]) {
-    remoteScans[sessionId] = [];
-  }
-  remoteScans[sessionId].push(barcode);
-  res.json({ success: true });
-});
-
-// @route   GET /api/products/remote-scan/:sessionId
-// @desc    Retrieve scanned barcodes for the laptop session
-// @access  Public
-router.get('/remote-scan/:sessionId', (req, res) => {
-  const { sessionId } = req.params;
-  const barcodes = remoteScans[sessionId] || [];
-  remoteScans[sessionId] = []; // Clear queue after reading
-  res.json({ barcodes });
-});
-
-// @route   GET /api/products/public-barcode/:code
-// @desc    Get product details by barcode (no auth required for mobile scanner lookup)
-// @access  Public
-router.get('/public-barcode/:code', async (req, res) => {
-  try {
-    const product = await Product.findOne({ barcode: req.params.code });
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
-    res.json({
-      _id: product._id,
-      name: product.name,
-      barcode: product.barcode,
-      category: product.category,
-      sellingPrice: product.sellingPrice,
-      stock: product.stock,
-      gstStock: product.gstStock || 0,
-      nonGstStock: product.nonGstStock || 0,
-      gstRate: product.gstRate ?? 12
-    });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// @route   POST /api/products/remote-stock-in
-// @desc    Replenish stock directly from mobile scanner
-// @access  Public
-router.post('/remote-stock-in', async (req, res) => {
-  const { barcode, quantity, sessionId } = req.body;
-  if (!barcode || quantity === undefined) {
-    return res.status(400).json({ message: 'Barcode and quantity required' });
-  }
-  try {
-    const qty = Number(quantity);
-    const product = await Product.findOne({ barcode });
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
-    product.gstStock = (product.gstStock || 0) + qty;
-    product.stock = (product.gstStock || 0) + (product.nonGstStock || 0);
-    await product.save();
-
-    // If a session ID was provided, signal the laptop to refresh its products list
-    if (sessionId) {
-      if (!remoteScans[sessionId]) {
-        remoteScans[sessionId] = [];
-      }
-      remoteScans[sessionId].push(barcode);
-    }
-
-    res.json({ name: product.name, stock: product.stock, gstStock: product.gstStock });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
 // All routes below are protected
 router.use(protect);
 
@@ -122,11 +37,11 @@ router.get('/barcode/:code', async (req, res) => {
 });
 
 // @route   GET /api/products
-// @desc    Get all products (with optional search)
+// @desc    Get all products (with optional search and optional pagination)
 // @access  Private
 router.get('/', async (req, res) => {
   try {
-    const { search, category } = req.query;
+    const { search, category, page, limit } = req.query;
     let filter = {};
 
     if (search) {
@@ -143,7 +58,24 @@ router.get('/', async (req, res) => {
       filter.category = category;
     }
 
-    const products = await Product.find(filter).sort({ createdAt: -1 });
+    // Support pagination if explicitly requested
+    if (page || limit) {
+      const pageNum = parseInt(page, 10) || 1;
+      const limitNum = parseInt(limit, 10) || 15;
+      const skip = (pageNum - 1) * limitNum;
+
+      const total = await Product.countDocuments(filter);
+      const products = await Product.find(filter)
+        .sort({ name: 1 }) // Sorted alphabetically
+        .skip(skip)
+        .limit(limitNum);
+      const pages = Math.ceil(total / limitNum) || 1;
+
+      return res.json({ products, total, pages, page: pageNum });
+    }
+
+    // Fallback standard un-paginated catalog list
+    const products = await Product.find(filter).sort({ name: 1 });
     res.json(products);
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });

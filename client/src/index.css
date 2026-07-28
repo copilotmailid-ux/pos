@@ -1808,6 +1808,7 @@ body.modal-open {
 
 .receipt-item {
   display: flex;
+  align-items: flex-start;
   font-size: 12px;
   color: var(--slate-600);
   margin-bottom: 6px;
@@ -1815,9 +1816,8 @@ body.modal-open {
 
 .receipt-item span:first-child {
   flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
   padding-right: 8px;
 }
 

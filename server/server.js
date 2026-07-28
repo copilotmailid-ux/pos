@@ -3,9 +3,10 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
 
-// Crash protection: Prevent Node from exiting on unexpected errors
+// Crash protection: Exit Node on critical errors so Electron auto-healing can spawn a clean process
 process.on('uncaughtException', (err) => {
   console.error('CRITICAL UNCAUGHT EXCEPTION:', err.message, err.stack);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {

@@ -52,17 +52,6 @@ const Billing = () => {
   const [quickForm, setQuickForm] = useState(emptyQuickForm);
   const [quickSaving, setQuickSaving] = useState(false);
 
-  // Mobile Remote Scanner States
-  const [sessionId] = useState(() => {
-    const saved = localStorage.getItem('pos_remote_session_id');
-    if (saved) return saved;
-    const newId = generateSessionId();
-    localStorage.setItem('pos_remote_session_id', newId);
-    return newId;
-  });
-  const [mobileScannerOpen, setMobileScannerOpen] = useState(false);
-  const [localIp, setLocalIp] = useState('');
-
   // Dropdown Product Search States
   const [searchResults, setSearchResults] = useState([]);
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
@@ -127,6 +116,7 @@ const Billing = () => {
   const barcodeRef = useRef(null);
   const searchInputRef = useRef(null);
   const qrCodeInstanceRef = useRef(null);
+  const searchTimeoutRef = useRef(null);
 
   // Math Calculations (CGST & SGST Split)
   const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -166,9 +156,7 @@ const Billing = () => {
       try { setHeldBills(JSON.parse(savedHeld)); } catch (e) {}
     }
 
-    const hostname = window.location.hostname;
-    const port = window.location.port;
-    setLocalIp(`${hostname}${port ? `:${port}` : ''}`);
+
 
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -293,23 +281,7 @@ const Billing = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [cart, customerMobile, customerName, heldBills, grandTotal, checkingOut]);
 
-  // Polling remote scans
-  useEffect(() => {
-    const pollInterval = setInterval(async () => {
-      try {
-        const { data } = await api.get(`/products/remote-scan/${sessionId}`);
-        if (data.barcodes && data.barcodes.length > 0) {
-          for (const scannedCode of data.barcodes) {
-            await handleBarcodeSubmit(scannedCode);
-          }
-        }
-      } catch (err) {
-        console.error("Failed polling remote scans", err);
-      }
-    }, 1500);
-
-    return () => clearInterval(pollInterval);
-  }, [sessionId, cart]);
+  // Resuming bill focus handler is managed by hooks below
 
   const addProductToCart = (product) => {
     const existingIndex = cart.findIndex((item) => item.productId === product._id);
@@ -395,14 +367,7 @@ const Billing = () => {
   };
 
   const handleBarcodeChange = (e) => {
-    const val = e.target.value;
-    setBarcode(val);
-    
-    // Auto-submit if standard barcode lengths are detected (EAN-8, UPC-A, EAN-13, EAN-14)
-    const cleanVal = val.trim();
-    if (cleanVal.length === 8 || cleanVal.length === 12 || cleanVal.length === 13 || cleanVal.length === 14) {
-      handleBarcodeSubmit(cleanVal);
-    }
+    setBarcode(e.target.value);
   };
 
   const handleBarcodeKeyDown = (e) => {
@@ -412,18 +377,24 @@ const Billing = () => {
     }
   };
 
-  const handleSearchQueryChange = async (e) => {
+  const handleSearchQueryChange = (e) => {
     const query = e.target.value;
     setSearchQuery(query);
 
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
     if (query.trim().length >= 2) {
-      try {
-        const { data } = await api.get(`/products?search=${encodeURIComponent(query)}`);
-        setSearchResults(data.slice(0, 8));
-        setActiveSearchIndex(-1);
-      } catch (err) {
-        console.error("Dropdown search failure", err);
-      }
+      searchTimeoutRef.current = setTimeout(async () => {
+        try {
+          const { data } = await api.get(`/products?search=${encodeURIComponent(query)}`);
+          setSearchResults(data.slice(0, 8));
+          setActiveSearchIndex(-1);
+        } catch (err) {
+          console.error("Dropdown search failure", err);
+        }
+      }, 200); // 200ms debounce to optimize network load
     } else {
       setSearchResults([]);
       setActiveSearchIndex(-1);
@@ -578,6 +549,7 @@ const Billing = () => {
 
   const handleCheckout = async () => {
     if (cart.length === 0) { toast.error('Add items to bill first'); return; }
+    if (checkingOut) return;
     setCheckingOut(true);
     try {
       const { data } = await api.post('/sales', {
@@ -595,8 +567,7 @@ const Billing = () => {
     finally { setCheckingOut(false); }
   };
 
-  const mobileScannerUrl = `${window.location.protocol}//${localIp}/scan?session=${sessionId}`;
-  const qrCodeImgSrc = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(mobileScannerUrl)}`;
+  // Render layout block
 
   return (
     <div className="animate-fade-in">

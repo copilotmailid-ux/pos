@@ -73,9 +73,14 @@ router.post('/', async (req, res) => {
     let total = 0;
     const processedItems = [];
 
+    // Batch-fetch all products referenced in the purchase in a single query
+    const productIds = items.map(item => item.product);
+    const productDocs = await Product.find({ _id: { $in: productIds } });
+    const productMap = new Map(productDocs.map(p => [p._id.toString(), p]));
+
     // Begin processing each item
     for (const item of items) {
-      const product = await Product.findById(item.product);
+      const product = productMap.get(item.product.toString ? item.product.toString() : item.product);
       if (!product) {
         return res.status(404).json({ message: `Product ${item.productName} not found` });
       }

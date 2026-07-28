@@ -56,6 +56,11 @@ const productSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes to speed up catalog queries, autocomplete, and sorting
+productSchema.index({ name: 1 });
+productSchema.index({ category: 1 });
+productSchema.index({ createdAt: -1 });
+
 // Keep total stock in sync with gstStock + nonGstStock before validation
 productSchema.pre('validate', function (next) {
   if (this.isNew && (this.stock > 0) && (!this.gstStock && !this.nonGstStock)) {

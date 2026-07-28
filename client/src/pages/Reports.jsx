@@ -16,6 +16,7 @@ import {
 const reportTypes = [
   { id: 'sales', name: 'Sales Report (All Sales)', icon: HiOutlineDocumentReport },
   { id: 'gst', name: 'GST Tax Report (Supplier A Stock)', icon: HiOutlineDocumentReport },
+  { id: 'gst-summary', name: 'GST Tax Rate & Type Summary', icon: HiOutlineDocumentReport },
   { id: 'non-gst', name: 'Non-GST Sales Report (Supplier B Stock)', icon: HiOutlineDocumentReport },
   { id: 'purchases', name: 'Purchase Report', icon: HiOutlineTruck },
   { id: 'stock', name: 'Stock Inventory Breakdown', icon: HiOutlineDatabase },
@@ -110,9 +111,9 @@ const Reports = () => {
           new Date(s.createdAt).toLocaleString(),
           s.customerMobile || 'Walk-in',
           s.items?.length || 0,
-          s.subtotal.toFixed(2),
-          s.taxAmount.toFixed(2),
-          s.grandTotal.toFixed(2),
+          (Number(s.subtotal) || 0).toFixed(2),
+          (Number(s.taxAmount) || 0).toFixed(2),
+          (Number(s.grandTotal) || 0).toFixed(2),
           s.status
         ]);
         break;
@@ -125,11 +126,25 @@ const Reports = () => {
           l.customerName,
           `${l.productName} ${l.variant || ''}`.trim(),
           l.gstQuantity,
-          l.price.toFixed(2),
+          (Number(l.price) || 0).toFixed(2),
           `${l.gstRate}%`,
-          l.subtotal.toFixed(2),
-          l.taxAmount.toFixed(2),
-          l.total.toFixed(2)
+          (Number(l.subtotal) || 0).toFixed(2),
+          (Number(l.taxAmount) || 0).toFixed(2),
+          (Number(l.total) || 0).toFixed(2)
+        ]);
+        break;
+
+      case 'gst-summary':
+        cols = ['GST Rate', 'Taxable Sales (₹)', 'GST Amount (₹)'];
+        rows = (data.slabBreakdown || []).map(s => [
+          s.gstRate,
+          (Number(s.taxableSales) || 0).toFixed(2),
+          (Number(s.gstAmount) || 0).toFixed(2)
+        ]);
+        rows.push([
+          'TOTAL',
+          (Number(data.totals?.totalTaxable) || 0).toFixed(2),
+          (Number(data.totals?.totalGst) || 0).toFixed(2)
         ]);
         break;
 
@@ -141,10 +156,10 @@ const Reports = () => {
           l.customerName,
           `${l.productName} ${l.variant || ''}`.trim(),
           l.nonGstQuantity,
-          l.price.toFixed(2),
-          l.subtotal ? l.subtotal.toFixed(2) : (l.price * l.nonGstQuantity).toFixed(2),
-          l.collectedTax ? l.collectedTax.toFixed(2) : ((l.price * l.nonGstQuantity) * 0.12).toFixed(2),
-          l.total ? l.total.toFixed(2) : ((l.price * l.nonGstQuantity) * 1.12).toFixed(2)
+          (Number(l.price) || 0).toFixed(2),
+          (Number(l.subtotal) || 0).toFixed(2),
+          (Number(l.collectedTax) || 0).toFixed(2),
+          (Number(l.total) || 0).toFixed(2)
         ]);
         break;
 
@@ -156,9 +171,9 @@ const Reports = () => {
           p.supplier?.supplierType || (p.supplier?.gstin ? 'GST' : 'Non-GST'),
           new Date(p.invoiceDate).toLocaleDateString(),
           p.paymentMethod,
-          p.subtotal.toFixed(2),
-          p.tax.toFixed(2),
-          p.total.toFixed(2),
+          (Number(p.subtotal) || 0).toFixed(2),
+          (Number(p.tax) || 0).toFixed(2),
+          (Number(p.total) || 0).toFixed(2),
           p.status
         ]);
         break;
@@ -173,8 +188,8 @@ const Reports = () => {
           p.gstStock || 0,
           p.nonGstStock || 0,
           p.stock,
-          (p.purchasePrice * p.stock).toFixed(2),
-          (p.sellingPrice * p.stock).toFixed(2)
+          ((Number(p.purchasePrice) || 0) * (p.stock || 0)).toFixed(2),
+          ((Number(p.sellingPrice) || 0) * (p.stock || 0)).toFixed(2)
         ]);
         break;
 
@@ -185,9 +200,9 @@ const Reports = () => {
           new Date(t.invoiceDate).toLocaleDateString(),
           t.paymentMethod,
           t.status,
-          t.subtotal.toFixed(2),
-          t.tax.toFixed(2),
-          t.total.toFixed(2)
+          (Number(t.subtotal) || 0).toFixed(2),
+          (Number(t.tax) || 0).toFixed(2),
+          (Number(t.total) || 0).toFixed(2)
         ]);
         break;
 
@@ -198,9 +213,9 @@ const Reports = () => {
           new Date(t.createdAt).toLocaleDateString(),
           t.paymentMethod,
           t.status,
-          t.subtotal.toFixed(2),
-          t.taxAmount.toFixed(2),
-          t.grandTotal.toFixed(2)
+          (Number(t.subtotal) || 0).toFixed(2),
+          (Number(t.taxAmount) || 0).toFixed(2),
+          (Number(t.grandTotal) || 0).toFixed(2)
         ]);
         break;
     }
@@ -211,7 +226,52 @@ const Reports = () => {
 
   // EXPORT EXCEL
   const exportToExcel = () => {
-    if (!reportData || previewRows.length === 0) return;
+    if (!reportData) return;
+
+    if (selectedReport === 'gst-summary') {
+      const slabHeader = ['GST Rate', 'Taxable Sales (₹)', 'GST Amount (₹)'];
+      const slabRows = (reportData.slabBreakdown || []).map(s => [
+        s.gstRate,
+        (Number(s.taxableSales) || 0).toFixed(2),
+        (Number(s.gstAmount) || 0).toFixed(2)
+      ]);
+      slabRows.push(['TOTAL', (Number(reportData.totals?.totalTaxable) || 0).toFixed(2), (Number(reportData.totals?.totalGst) || 0).toFixed(2)]);
+
+      const typeHeader = ['GST Type', 'Amount (₹)'];
+      const typeRows = (reportData.typeSummary || []).map(t => [
+        t.gstType,
+        (Number(t.amount) || 0).toFixed(2)
+      ]);
+      typeRows.push(['TOTAL GST', (Number(reportData.totals?.totalGst) || 0).toFixed(2)]);
+
+      const worksheet = XLSX.utils.aoa_to_sheet([
+        [`SuperMart POS - GST Tax Rate & Type Summary`],
+        [`Date Range: ${startDate} to ${endDate}`],
+        [],
+        ['GST RATE WISE SUMMARY'],
+        slabHeader,
+        ...slabRows,
+        [],
+        ['GST TYPE SUMMARY'],
+        typeHeader,
+        ...typeRows
+      ]);
+
+      worksheet['!cols'] = [
+        { wch: 28 }, // Column A (Labels, Rates, Types)
+        { wch: 24 }, // Column B (Taxable sales)
+        { wch: 24 }  // Column C (GST amounts)
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'GST Summary');
+      const fileName = `SuperMart_GST_Summary_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      XLSX.writeFile(workbook, fileName);
+      toast.success('GST Summary Excel spreadsheet downloaded!');
+      return;
+    }
+
+    if (previewRows.length === 0) return;
 
     // Create sheet data
     const headerRow = [...previewColumns];
@@ -240,6 +300,23 @@ const Reports = () => {
       ...dataRows
     ]);
 
+    // Auto-fit columns based on length of header & cell content (skipping the title rows)
+    const colWidths = headerRow.map((col, colIdx) => {
+      let maxLen = col ? col.toString().length : 10;
+      dataRows.forEach(row => {
+        const val = row[colIdx];
+        if (val !== undefined && val !== null) {
+          const len = val.toString().length;
+          if (len > maxLen) {
+            maxLen = len;
+          }
+        }
+      });
+      // Add extra safety padding
+      return { wch: Math.max(maxLen + 4, 12) };
+    });
+    worksheet['!cols'] = colWidths;
+
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Report');
 
@@ -250,7 +327,63 @@ const Reports = () => {
 
   // EXPORT PDF
   const exportToPDF = () => {
-    if (!reportData || previewRows.length === 0) return;
+    if (!reportData) return;
+
+    if (selectedReport === 'gst-summary') {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      doc.setFontSize(18);
+      doc.setTextColor(30, 41, 59);
+      doc.text('SUPERMART POS SYSTEM', 14, 18);
+      doc.setFontSize(12);
+      doc.setTextColor(71, 85, 105);
+      doc.text('Report: GST Tax Rate & Type Summary', 14, 25);
+      doc.setFontSize(9);
+      doc.text(`Generated: ${new Date().toLocaleString()} | Period: ${startDate} to ${endDate}`, 14, 31);
+      doc.setLineWidth(0.5);
+      doc.setDrawColor(226, 232, 240);
+      doc.line(14, 35, 196, 35);
+
+      doc.setFontSize(12);
+      doc.setTextColor(30, 41, 59);
+      doc.text('GST Rate Wise Summary', 14, 42);
+
+      const slabBody = [
+        ...(reportData.slabBreakdown || []).map(s => [s.gstRate, `₹${(Number(s.taxableSales) || 0).toFixed(2)}`, `₹${(Number(s.gstAmount) || 0).toFixed(2)}`]),
+        ['TOTAL', `₹${(Number(reportData.totals?.totalTaxable) || 0).toFixed(2)}`, `₹${(Number(reportData.totals?.totalGst) || 0).toFixed(2)}`]
+      ];
+
+      autoTable(doc, {
+        startY: 46,
+        head: [['GST Rate', 'Taxable Sales (₹)', 'GST Amount (₹)']],
+        body: slabBody,
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' }
+      });
+
+      const nextY = doc.lastAutoTable.finalY + 12;
+      doc.setFontSize(12);
+      doc.text('GST Type Summary', 14, nextY);
+
+      const typeBody = [
+        ...(reportData.typeSummary || []).map(t => [t.gstType, `₹${(Number(t.amount) || 0).toFixed(2)}`]),
+        ['TOTAL GST', `₹${(Number(reportData.totals?.totalGst) || 0).toFixed(2)}`]
+      ];
+
+      autoTable(doc, {
+        startY: nextY + 4,
+        head: [['GST Type', 'Amount (₹)']],
+        body: typeBody,
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [16, 185, 129], textColor: [255, 255, 255], fontStyle: 'bold' }
+      });
+
+      const fileName = `SuperMart_GST_Summary_${new Date().toISOString().slice(0, 10)}.pdf`;
+      doc.save(fileName);
+      toast.success('GST Summary PDF document downloaded!');
+      return;
+    }
+
+    if (previewRows.length === 0) return;
 
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const reportName = reportTypes.find(r => r.id === selectedReport).name;
@@ -412,7 +545,7 @@ const Reports = () => {
                     {reportTypes.find(r => r.id === selectedReport)?.name} Preview
                   </h2>
                   <p style={{ fontSize: '13px', color: 'var(--slate-500)' }}>
-                    Found {previewRows.length} record entries
+                    {selectedReport === 'gst-summary' ? 'GST Rate Slabs & Tax Type Breakdown' : `Found ${previewRows.length} record entries`}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
@@ -425,7 +558,25 @@ const Reports = () => {
                 </div>
               </div>
 
-              {/* Data Table */}
+              {/* GST Summary Stat Cards */}
+              {selectedReport === 'gst-summary' && reportData?.totals && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 24 }}>
+                  <div style={{ padding: 14, borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                    <div style={{ fontSize: 11, color: 'var(--slate-500)', fontWeight: 600 }}>Total Taxable Sales</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--slate-800)' }}>₹{(Number(reportData.totals.totalTaxable) || 0).toFixed(2)}</div>
+                  </div>
+                  <div style={{ padding: 14, borderRadius: 10, background: '#eef2ff', border: '1px solid #c7d2fe' }}>
+                    <div style={{ fontSize: 11, color: 'var(--brand-600)', fontWeight: 600 }}>Total GST Tax Collected</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--brand-700)' }}>₹{(Number(reportData.totals.totalGst) || 0).toFixed(2)}</div>
+                  </div>
+                  <div style={{ padding: 14, borderRadius: 10, background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
+                    <div style={{ fontSize: 11, color: '#047857', fontWeight: 600 }}>CGST / SGST Split</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: '#065f46' }}>₹{(Number(reportData.totals.cgst) || 0).toFixed(2)} each</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Main Table */}
               <div className="table-wrapper" style={{ flex: 1 }}>
                 <table className="data-table">
                   <thead>
@@ -437,7 +588,7 @@ const Reports = () => {
                   </thead>
                   <tbody>
                     {previewRows.map((row, rIdx) => (
-                      <tr key={rIdx}>
+                      <tr key={rIdx} style={row[0] === 'TOTAL' ? { fontWeight: 700, background: 'var(--slate-50)' } : {}}>
                         {row.map((cell, cIdx) => (
                           <td key={cIdx}>{cell}</td>
                         ))}
@@ -446,6 +597,39 @@ const Reports = () => {
                   </tbody>
                 </table>
               </div>
+
+              {/* Second Table for GST Summary (Type Breakdown) */}
+              {selectedReport === 'gst-summary' && reportData?.typeSummary && (
+                <div style={{ marginTop: 24 }}>
+                  <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--slate-800)', marginBottom: 12 }}>
+                    GST Type Breakdown
+                  </h3>
+                  <div className="table-wrapper">
+                    <table className="data-table" style={{ width: '100%' }}>
+                      <thead>
+                        <tr>
+                          <th>GST Type</th>
+                          <th className="text-right">Amount (₹)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reportData.typeSummary.map((t, idx) => (
+                          <tr key={idx}>
+                            <td className="font-semibold">{t.gstType}</td>
+                            <td className="text-right font-medium">₹{(Number(t.amount) || 0).toFixed(2)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ background: 'var(--slate-50)', fontWeight: 700 }}>
+                          <td>TOTAL GST</td>
+                          <td className="text-right" style={{ color: 'var(--brand-600)' }}>
+                            ₹{(Number(reportData.totals?.totalGst) || 0).toFixed(2)}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '60px 20px', textAlign: 'center', color: 'var(--slate-400)' }}>

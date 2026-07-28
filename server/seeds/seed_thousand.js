@@ -15,7 +15,7 @@ const gstSlabs = [0, 5, 12, 18, 28];
 const seedThousandProducts = async () => {
   try {
     await mongoose.connect(process.env.MONGO_URI);
-    console.log('Connected to MongoDB to seed 1,000 products...');
+    console.log('Connected to MongoDB to seed 2,500 products...');
 
     // Wipe existing products
     await Product.deleteMany({});
@@ -24,7 +24,7 @@ const seedThousandProducts = async () => {
     const products = [];
     const createdBarcodes = new Set();
 
-    for (let i = 1; i <= 1000; i++) {
+    for (let i = 1; i <= 2500; i++) {
       // Pick random combinations
       const brand = brands[Math.floor(Math.random() * brands.length)];
       const item = items[Math.floor(Math.random() * items.length)];
@@ -44,8 +44,25 @@ const seedThousandProducts = async () => {
       const margin = Math.random() * 0.15 + 0.15;
       const sellingPrice = Math.floor(purchasePrice * (1 + margin));
 
-      // Random stock quantity between 0 and 150
-      const stock = Math.floor(Math.random() * 150);
+      // Random stock quantity between 10 and 150
+      const totalStock = Math.floor(Math.random() * 141) + 10;
+
+      let gstStock = 0;
+      let nonGstStock = 0;
+
+      const randType = Math.random();
+      if (randType < 0.4) {
+        // GST-only (Supplier A)
+        gstStock = totalStock;
+      } else if (randType < 0.8) {
+        // Non-GST-only (Supplier B)
+        nonGstStock = totalStock;
+      } else {
+        // Mixed stock
+        const gstRatio = Math.random() * 0.4 + 0.4; // 40% to 80% GST stock
+        gstStock = Math.round(totalStock * gstRatio);
+        nonGstStock = totalStock - gstStock;
+      }
 
       products.push({
         name: productName,
@@ -54,7 +71,9 @@ const seedThousandProducts = async () => {
         category: category,
         purchasePrice: purchasePrice,
         sellingPrice: sellingPrice,
-        stock: stock,
+        stock: totalStock,
+        gstStock: gstStock,
+        nonGstStock: nonGstStock,
         gstRate: gstRate
       });
     }

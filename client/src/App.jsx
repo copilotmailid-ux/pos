@@ -9,7 +9,6 @@ import Products from './pages/Products';
 import Billing from './pages/Billing';
 import SalesHistory from './pages/SalesHistory';
 import LowStock from './pages/LowStock';
-import Scan from './pages/Scan';
 import Customers from './pages/Customers';
 import Suppliers from './pages/Suppliers';
 import Purchases from './pages/Purchases';
@@ -33,7 +32,6 @@ function App() {
         />
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/scan" element={<Scan />} />
           <Route
             path="/"
             element={

@@ -1,62 +1,96 @@
-const mongoose = require('mongoose');
-const dotenv = require('dotenv');
-const path = require('path');
-
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
-
-const Product = require('../models/Product');
-const Supplier = require('../models/Supplier');
-const Customer = require('../models/Customer');
-const Sale = require('../models/Sale');
-const SaleItem = require('../models/SaleItem');
+const { db, initializeDB, run } = require('../config/db');
 
 const seedData = async () => {
   try {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log('MongoDB Connected for seeding POS workspace data...');
+    console.log('Initializing SQLite Database Tables...');
+    await initializeDB();
 
-    // Clear existing data
-    await Product.deleteMany({});
-    await Supplier.deleteMany({});
-    await Customer.deleteMany({});
-    await Sale.deleteMany({});
-    await SaleItem.deleteMany({});
+    db.serialize(() => {
+      db.run("BEGIN TRANSACTION");
 
-    // 1. Create Supplier A (GST) and Supplier B (Non-GST)
-    const suppliers = [
-      { name: 'Supplier A (GST Tax Invoices)', supplierType: 'GST', contactPerson: 'Anand Kumar', phone: '9876543210', email: 'anand@supplier-a.com', address: 'GST Trade Complex, Chennai', gstin: '33AAAAA0000A1Z5' },
-      { name: 'Supplier B (Non-GST / Local Wholesale)', supplierType: 'Non-GST', contactPerson: 'Bala Subbu', phone: '9444123456', email: 'bala@supplier-b.com', address: 'Wholesale Market, Madurai', gstin: '' }
-    ];
-    const createdSuppliers = await Supplier.insertMany(suppliers);
-    console.log(`${createdSuppliers.length} suppliers registered (Supplier A - GST & Supplier B - Non-GST)`);
+      // Clear existing data
+      db.run("DELETE FROM products");
+      db.run("DELETE FROM suppliers");
+      db.run("DELETE FROM customers");
+      db.run("DELETE FROM sales");
+      db.run("DELETE FROM sale_items");
+      db.run("DELETE FROM purchases");
+      db.run("DELETE FROM purchase_items");
+      db.run("DELETE FROM counters");
 
-    // 2. Create customer registry profiles
-    const customers = [
-      { name: 'Deva', mobile: '9360480902' },
-      { name: 'Suresh Kumar', mobile: '9398989898' },
-      { name: 'Ravi Teja', mobile: '9876543210' },
-      { name: 'Ananya', mobile: '9123456789' }
-    ];
-    const createdCustomers = await Customer.insertMany(customers);
-    console.log(`${createdCustomers.length} loyal customer profiles registered`);
+      // Seed initial counters row
+      db.run(`INSERT INTO counters (id, seq) VALUES ('invoiceNo', 0)`);
 
-    // 3. Create products with GST Stock (from Supplier A) and Non-GST Stock (from Supplier B)
-    const products = [
-      { name: 'Dabur Red Paste', variant: '10 Rs', barcode: '8901207010', category: 'Personal Care', purchasePrice: 8.0, sellingPrice: 10.0, gstStock: 50, nonGstStock: 50, gstRate: 18 },
-      { name: 'Dabur Red Paste', variant: '20 Rs', barcode: '8901207020', category: 'Personal Care', purchasePrice: 16.0, sellingPrice: 20.0, gstStock: 25, nonGstStock: 10, gstRate: 18 },
-      { name: 'Amul Milk', variant: '500ml', barcode: '8901262050', category: 'Dairy', purchasePrice: 24.0, sellingPrice: 28.0, gstStock: 40, nonGstStock: 20, gstRate: 5 },
-      { name: 'Coca Cola', variant: '250ml Can', barcode: '8901764025', category: 'Beverages', purchasePrice: 28.0, sellingPrice: 35.0, gstStock: 30, nonGstStock: 10, gstRate: 28 },
-      { name: 'Lays Classic', variant: '20g', barcode: '8901491020', category: 'Snacks', purchasePrice: 8.5, sellingPrice: 10.0, gstStock: 100, nonGstStock: 50, gstRate: 12 },
-      { name: 'Aashirvaad Atta', variant: '5kg', barcode: '8901725181', category: 'Grocery', purchasePrice: 240.0, sellingPrice: 285.0, gstStock: 10, nonGstStock: 5, gstRate: 5 },
-      { name: 'Fortune Sunflower Oil', variant: '1L Pouch', barcode: '8906007281', category: 'Grocery', purchasePrice: 130.0, sellingPrice: 155.0, gstStock: 20, nonGstStock: 5, gstRate: 5 }
-    ];
-    
-    const createdProducts = await Product.insertMany(products);
-    console.log(`${createdProducts.length} dual-stock products seeded (GST Stock + Non-GST Stock)`);
+      // 1. Create Supplier A (GST) and Supplier B (Non-GST)
+      const suppliers = [
+        ['Supplier A (GST Tax Invoices)', 'GST', 'Anand Kumar', '9876543210', 'anand@supplier-a.com', 'GST Trade Complex, Chennai', '33AAAAA0000A1Z5'],
+        ['Supplier B (Non-GST / Local Wholesale)', 'Non-GST', 'Bala Subbu', '9444123456', 'bala@supplier-b.com', 'Wholesale Market, Madurai', '']
+      ];
 
-    console.log('\n--- Seeding Process Completed Successfully ---');
-    console.log('Unlock Passcode: admin123');
-    process.exit(0);
+      const supplierStmt = db.prepare(`
+        INSERT INTO suppliers (name, supplierType, contactPerson, phone, email, address, gstin)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const sup of suppliers) {
+        supplierStmt.run(sup);
+      }
+      supplierStmt.finalize();
+      console.log('Suppliers registered (Supplier A - GST & Supplier B - Non-GST)');
+
+      // 2. Create customer registry profiles
+      const customers = [
+        ['Deva', '9360480902'],
+        ['Suresh Kumar', '9398989898'],
+        ['Ravi Teja', '9876543210'],
+        ['Ananya', '9123456789']
+      ];
+
+      const customerStmt = db.prepare(`
+        INSERT INTO customers (name, mobile)
+        VALUES (?, ?)
+      `);
+
+      for (const cust of customers) {
+        customerStmt.run(cust);
+      }
+      customerStmt.finalize();
+      console.log('Loyal customer profiles registered');
+
+      // 3. Create products
+      const products = [
+        ['Dabur Red Paste', '10 Rs', '8901207010', 'Personal Care', 8.0, 10.0, 100, 50, 50, 18],
+        ['Dabur Red Paste', '20 Rs', '8901207020', 'Personal Care', 16.0, 20.0, 35, 25, 10, 18],
+        ['Amul Milk', '500ml', '8901262050', 'Dairy', 24.0, 28.0, 60, 40, 20, 5],
+        ['Coca Cola', '250ml Can', '8901764025', 'Beverages', 28.0, 35.0, 40, 30, 10, 28],
+        ['Lays Classic', '20g', '8901491020', 'Snacks', 8.5, 10.0, 150, 100, 50, 12],
+        ['Aashirvaad Atta', '5kg', '8901725181', 'Grocery', 240.0, 285.0, 15, 10, 5, 5],
+        ['Fortune Sunflower Oil', '1L Pouch', '8906007281', 'Grocery', 130.0, 155.0, 25, 20, 5, 5]
+      ];
+
+      const productStmt = db.prepare(`
+        INSERT INTO products (name, variant, barcode, category, purchasePrice, sellingPrice, stock, gstStock, nonGstStock, gstRate)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const prod of products) {
+        productStmt.run(prod);
+      }
+      productStmt.finalize();
+      console.log('Dual-stock products seeded (GST Stock + Non-GST Stock)');
+
+      db.run("COMMIT", (err) => {
+        if (err) {
+          console.error('Commit failed:', err.message);
+          process.exit(1);
+        } else {
+          console.log('\n--- Seeding Process Completed Successfully ---');
+          console.log('Unlock Passcode: admin123');
+          db.close();
+          process.exit(0);
+        }
+      });
+    });
   } catch (error) {
     console.error('Seeding critical failure:', error.message);
     process.exit(1);

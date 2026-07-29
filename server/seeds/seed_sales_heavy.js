@@ -1,12 +1,11 @@
-const mongoose = require('mongoose');
-const dotenv = require('dotenv');
+const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
+const dbPath = process.env.SQLITE_DB_PATH || path.join(__dirname, '..', 'database.sqlite');
+console.log('Seeding sales to SQLite database at:', dbPath);
 
-const Product = require('../models/Product');
-const Sale = require('../models/Sale');
-const SaleItem = require('../models/SaleItem');
+const db = new sqlite3.Database(dbPath);
 
 const customersList = [
   { name: 'Deva', mobile: '9360480902' },
@@ -22,182 +21,200 @@ const customersList = [
 
 const paymentMethods = ['Cash Tendered', 'UPI / Card', 'Cash Tendered', 'UPI / Card'];
 
+const all = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+};
+
+const run = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve({ id: this.lastID, changes: this.changes });
+    });
+  });
+};
+
 const seedHeavySales = async () => {
   try {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log('Connected to MongoDB. Fetching products to build sales history...');
-
-    // Fetch existing products to link sales items
-    const products = await Product.find().lean();
+    const products = await all(`SELECT * FROM products`);
     if (products.length === 0) {
       console.error('No products found in the database. Please seed products first using seed_thousand.js!');
       process.exit(1);
     }
     console.log(`Loaded ${products.length} products to choose from.`);
 
-    // Wipe existing sales database tables
-    console.log('Clearing existing sales history...');
-    await Sale.deleteMany({});
-    await SaleItem.deleteMany({});
+    db.serialize(() => {
+      db.run("BEGIN TRANSACTION");
 
-    const salesList = [];
-    const saleItemsList = [];
-    const totalSalesToSeed = 10000;
-    const batchSize = 2500;
+      db.run("DELETE FROM sales");
+      db.run("DELETE FROM sale_items");
+      db.run("DELETE FROM counters WHERE id = 'invoiceNo'");
+      db.run("INSERT INTO counters (id, seq) VALUES ('invoiceNo', 10000)");
 
-    // Build a running stock tracker to FIFO allocate gstStock vs nonGstStock across sales
-    const stockTracker = {};
-    for (const p of products) {
-      stockTracker[p._id.toString()] = {
-        gstStock: p.gstStock || 0,
-        nonGstStock: p.nonGstStock || 0
-      };
-    }
+      const saleStmt = db.prepare(`
+        INSERT INTO sales (id, invoiceNo, customerMobile, customerName, paymentMethod, amountPaid, changeReturned, subtotal, gstSubtotal, nonGstSubtotal, taxAmount, cgstAmount, sgstAmount, grandTotal, reportGstTax, reportNonGstAmount, status, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Completed', ?, ?)
+      `);
 
-    console.log(`Generating ${totalSalesToSeed} sales records in-memory...`);
+      const itemStmt = db.prepare(`
+        INSERT INTO sale_items (saleId, productId, productName, variant, barcode, quantity, gstQuantity, nonGstQuantity, price, purchasePrice, total, gstRate, taxAmount, reportGstTax, reportNonGstAmount, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
 
-    // Helper to generate dates distributed over the last 30 days
-    const now = new Date();
+      const totalSalesToSeed = 10000;
+      const now = new Date();
 
-    for (let i = 1; i <= totalSalesToSeed; i++) {
-      // 1. Pick a random customer profile
-      const cust = customersList[Math.floor(Math.random() * customersList.length)];
-      
-      // 2. Select number of items (1 to 4)
-      const numItems = Math.floor(Math.random() * 4) + 1;
-      const saleId = new mongoose.Types.ObjectId();
-      
-      let subtotal = 0;
-      let taxAmount = 0;
-      const saleItemIds = [];
+      // Build a running stock tracker to FIFO allocate gstStock vs nonGstStock across sales
+      const stockTracker = {};
+      for (const p of products) {
+        stockTracker[p.id] = {
+          gstStock: p.gstStock || 0,
+          nonGstStock: p.nonGstStock || 0
+        };
+      }
 
-      for (let j = 0; j < numItems; j++) {
-        // Pick a random product
-        const product = products[Math.floor(Math.random() * products.length)];
-        const pid = product._id.toString();
-        const qty = Math.floor(Math.random() * 3) + 1; // Quantity 1 to 3
-        const itemGst = product.gstRate ?? 12;
-        
-        // FIFO: Allocate from gstStock first, then nonGstStock
-        const tracker = stockTracker[pid];
-        let gstQty = 0;
-        let nonGstQty = 0;
+      let itemIdCounter = 1;
 
-        if (tracker.gstStock >= qty) {
-          gstQty = qty;
-          tracker.gstStock -= qty;
-        } else {
-          gstQty = tracker.gstStock;
-          const remaining = qty - gstQty;
-          tracker.gstStock = 0;
-          if (tracker.nonGstStock >= remaining) {
-            nonGstQty = remaining;
-            tracker.nonGstStock -= remaining;
+      for (let i = 1; i <= totalSalesToSeed; i++) {
+        const cust = customersList[Math.floor(Math.random() * customersList.length)];
+        const numItems = Math.floor(Math.random() * 4) + 1;
+        const saleId = i;
+
+        let subtotal = 0;
+        let taxAmount = 0;
+        let gstSubtotal = 0;
+        let nonGstSubtotal = 0;
+        let reportGstTaxSum = 0;
+        let reportNonGstAmountSum = 0;
+
+        const saleDate = new Date(now);
+        const daysAgo = Math.floor(Math.random() * 30);
+        const hour = Math.floor(Math.random() * 12) + 9; // 9 AM to 9 PM
+        const minute = Math.floor(Math.random() * 60);
+        saleDate.setDate(saleDate.getDate() - daysAgo);
+        saleDate.setHours(hour, minute, 0, 0);
+        const saleDateStr = saleDate.toISOString().replace('T', ' ').slice(0, 19);
+
+        for (let j = 0; j < numItems; j++) {
+          const product = products[Math.floor(Math.random() * products.length)];
+          const qty = Math.floor(Math.random() * 3) + 1;
+          const itemGst = product.gstRate ?? 12;
+
+          const tracker = stockTracker[product.id];
+          let gstQty = 0;
+          let nonGstQty = 0;
+
+          if (tracker.gstStock >= qty) {
+            gstQty = qty;
+            tracker.gstStock -= qty;
           } else {
-            nonGstQty = tracker.nonGstStock;
-            tracker.nonGstStock = 0;
-            // If both exhausted, still record the sale (unlimited virtual stock for seeding)
-            // But distribute: majority to gstQty
-            const deficit = remaining - nonGstQty;
-            gstQty += Math.ceil(deficit * 0.6);
-            nonGstQty += deficit - Math.ceil(deficit * 0.6);
+            gstQty = tracker.gstStock;
+            const remaining = qty - gstQty;
+            tracker.gstStock = 0;
+            if (tracker.nonGstStock >= remaining) {
+              nonGstQty = remaining;
+              tracker.nonGstStock -= remaining;
+            } else {
+              nonGstQty = tracker.nonGstStock;
+              tracker.nonGstStock = 0;
+              const deficit = remaining - nonGstQty;
+              gstQty += Math.ceil(deficit * 0.6);
+              nonGstQty += deficit - Math.ceil(deficit * 0.6);
+            }
           }
+
+          const itemSubtotal = product.sellingPrice * qty;
+          const itemTax = itemSubtotal * (itemGst / 100);
+          const itemGstSubtotal = product.sellingPrice * gstQty;
+          const itemNonGstSubtotal = product.sellingPrice * nonGstQty;
+
+          const reportGstTax = itemGstSubtotal * (itemGst / 100);
+          const reportNonGstAmount = itemNonGstSubtotal;
+
+          subtotal += itemSubtotal;
+          taxAmount += itemTax;
+          gstSubtotal += itemGstSubtotal;
+          nonGstSubtotal += itemNonGstSubtotal;
+          reportGstTaxSum += reportGstTax;
+          reportNonGstAmountSum += reportNonGstAmount;
+
+          const totalLineVal = itemSubtotal + itemTax;
+
+          itemStmt.run(
+            saleId,
+            product.id,
+            product.name,
+            product.variant || '',
+            product.barcode,
+            qty,
+            gstQty,
+            nonGstQty,
+            product.sellingPrice,
+            product.purchasePrice || 0,
+            Number(totalLineVal.toFixed(2)),
+            itemGst,
+            Number(itemTax.toFixed(2)),
+            Number(reportGstTax.toFixed(2)),
+            Number(reportNonGstAmount.toFixed(2)),
+            saleDateStr,
+            saleDateStr
+          );
         }
 
-        const itemSubtotal = product.sellingPrice * qty;
-        const itemTax = itemSubtotal * (itemGst / 100);
-        
-        // Report-level GST tracking
-        const reportGstTax = product.sellingPrice * gstQty * (itemGst / 100);
-        const reportNonGstAmount = product.sellingPrice * nonGstQty;
+        const grandTotal = subtotal + taxAmount;
+        const cgstAmount = taxAmount / 2;
+        const sgstAmount = taxAmount / 2;
 
-        subtotal += itemSubtotal;
-        taxAmount += itemTax;
+        const method = paymentMethods[Math.floor(Math.random() * paymentMethods.length)];
+        let amountPaid = grandTotal;
+        let changeReturned = 0;
+        if (method === 'Cash Tendered') {
+          const nextHundred = Math.ceil(grandTotal / 100) * 100;
+          amountPaid = nextHundred;
+          changeReturned = nextHundred - grandTotal;
+        }
 
-        const saleItemId = new mongoose.Types.ObjectId();
-        saleItemIds.push(saleItemId);
-
-        saleItemsList.push({
-          _id: saleItemId,
-          sale: saleId,
-          product: product._id,
-          productName: product.name,
-          variant: product.variant || '',
-          barcode: product.barcode,
-          quantity: qty,
-          gstQuantity: gstQty,
-          nonGstQuantity: nonGstQty,
-          price: product.sellingPrice,
-          purchasePrice: product.purchasePrice || 0,
-          gstRate: itemGst,
-          taxAmount: itemTax,
-          reportGstTax: Number(reportGstTax.toFixed(2)),
-          reportNonGstAmount: Number(reportNonGstAmount.toFixed(2)),
-          total: itemSubtotal + itemTax
-        });
+        saleStmt.run(
+          saleId,
+          `INV-${String(i).padStart(5, '0')}`,
+          cust.mobile,
+          cust.name,
+          method,
+          Number(amountPaid.toFixed(2)),
+          Number(changeReturned.toFixed(2)),
+          Number(subtotal.toFixed(2)),
+          Number(gstSubtotal.toFixed(2)),
+          Number(nonGstSubtotal.toFixed(2)),
+          Number(taxAmount.toFixed(2)),
+          Number(cgstAmount.toFixed(2)),
+          Number(sgstAmount.toFixed(2)),
+          Number(grandTotal.toFixed(2)),
+          Number(reportGstTaxSum.toFixed(2)),
+          Number(reportNonGstAmountSum.toFixed(2)),
+          saleDateStr,
+          saleDateStr
+        );
       }
 
-      const grandTotal = subtotal + taxAmount;
-      const cgstAmount = taxAmount / 2;
-      const sgstAmount = taxAmount / 2;
+      saleStmt.finalize();
+      itemStmt.finalize();
 
-      // Random amount paid and change due
-      const method = paymentMethods[Math.floor(Math.random() * paymentMethods.length)];
-      let amountPaid = grandTotal;
-      let changeReturned = 0;
-      if (method === 'Cash Tendered') {
-        const nextHundred = Math.ceil(grandTotal / 100) * 100;
-        amountPaid = nextHundred;
-        changeReturned = nextHundred - grandTotal;
-      }
-
-      // Distribute sales dates randomly over the last 30 days
-      const daysAgo = Math.floor(Math.random() * 30);
-      const hour = Math.floor(Math.random() * 12) + 9; // 9 AM to 9 PM
-      const minute = Math.floor(Math.random() * 60);
-      const saleDate = new Date(now);
-      saleDate.setDate(saleDate.getDate() - daysAgo);
-      saleDate.setHours(hour, minute, 0, 0);
-
-      salesList.push({
-        _id: saleId,
-        invoiceNo: `INV-${String(i).padStart(5, '0')}`,
-        items: saleItemIds,
-        customerMobile: cust.mobile,
-        customerName: cust.name,
-        paymentMethod: method,
-        amountPaid: Number(amountPaid.toFixed(2)),
-        changeReturned: Number(changeReturned.toFixed(2)),
-        subtotal: Number(subtotal.toFixed(2)),
-        taxAmount: Number(taxAmount.toFixed(2)),
-        cgstAmount: Number(cgstAmount.toFixed(2)),
-        sgstAmount: Number(sgstAmount.toFixed(2)),
-        grandTotal: Number(grandTotal.toFixed(2)),
-        createdAt: saleDate,
-        updatedAt: saleDate
+      db.run("COMMIT", (err) => {
+        if (err) {
+          console.error('Commit failed:', err.message);
+          process.exit(1);
+        } else {
+          console.log(`Successfully seeded exactly 10000 sales receipts and sale_items in SQLite!`);
+          db.close();
+          process.exit(0);
+        }
       });
-    }
-
-    // 5. Bulk Insert operations
-    console.log('Sales structures generated in-memory. Starting fast database bulk inserts...');
-    
-    // Insert SaleItems first
-    for (let offset = 0; offset < saleItemsList.length; offset += batchSize) {
-      const batch = saleItemsList.slice(offset, offset + batchSize);
-      await SaleItem.insertMany(batch);
-      console.log(`Inserted SaleItems: ${offset + batch.length} / ${saleItemsList.length}...`);
-    }
-
-    // Insert Sales
-    for (let offset = 0; offset < salesList.length; offset += batchSize) {
-      const batch = salesList.slice(offset, offset + batchSize);
-      await Sale.insertMany(batch);
-      console.log(`Inserted Sales: ${offset + batch.length} / ${salesList.length}...`);
-    }
-
-    console.log('\n--- Seeding Process Completed Successfully ---');
-    console.log(`Seeded exactly ${salesList.length} sales receipts and ${saleItemsList.length} checkout items!`);
-    process.exit(0);
+    });
   } catch (error) {
     console.error('Seeding process crashed:', error.message);
     process.exit(1);

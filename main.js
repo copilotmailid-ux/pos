@@ -84,7 +84,8 @@ if (!gotSingleInstanceLock) {
       env: {
         ...process.env,
         PORT: 5000,
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        SQLITE_DB_PATH: path.join(app.getPath('userData'), 'database.sqlite')
       }
     });
 

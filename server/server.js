@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const connectDB = require('./config/db');
+const { initializeDB } = require('./config/db');
 
 // Crash protection: Exit Node on critical errors so Electron auto-healing can spawn a clean process
 process.on('uncaughtException', (err) => {
@@ -28,8 +28,15 @@ if (fs.existsSync(externalEnvPath)) {
   dotenv.config({ path: path.join(__dirname, '.env') });
 }
 
-// Connect to database
-connectDB();
+// Connect and initialize database
+initializeDB()
+  .then(() => {
+    console.log('SQLite Database Initialized and Connected Successfully');
+  })
+  .catch((err) => {
+    console.error('SQLite Database Initialization Error:', err);
+    process.exit(1);
+  });
 
 const app = express();
 

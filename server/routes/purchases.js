@@ -1,47 +1,117 @@
 const express = require('express');
+const { get, all, run, transaction } = require('../config/db');
+const { protect } = require('../middleware/auth');
+
 const router = express.Router();
-const Purchase = require('../models/Purchase');
-const Product = require('../models/Product');
-const Supplier = require('../models/Supplier');
+router.use(protect);
+
+// Helper to map relational row to the nested supplier format expected by the client UI
+const mapPurchaseRow = (row) => {
+  if (!row) return row;
+  return {
+    _id: row.id,
+    id: row.id,
+    purchaseNumber: row.purchaseNumber,
+    purchaseTaxType: row.purchaseTaxType,
+    subtotal: row.subtotal,
+    tax: row.tax,
+    total: row.total,
+    paymentMethod: row.paymentMethod,
+    status: row.status,
+    notes: row.notes,
+    invoiceDate: row.invoiceDate,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    supplier: {
+      _id: row.supplierId,
+      id: row.supplierId,
+      name: row.supplierName || 'Unknown Supplier',
+      phone: row.supplierPhone || '',
+      contactPerson: row.supplierContact || '',
+      supplierType: row.supplierType || 'GST',
+      gstin: row.supplierGstin || ''
+    }
+  };
+};
 
 // GET all purchases
 router.get('/', async (req, res) => {
   try {
     const { search } = req.query;
-    let query = {};
-    
+    let sql = `
+      SELECT 
+        p.*,
+        s.name as supplierName,
+        s.phone as supplierPhone,
+        s.contactPerson as supplierContact,
+        s.supplierType as supplierType,
+        s.gstin as supplierGstin
+      FROM purchases p
+      LEFT JOIN suppliers s ON p.supplierId = s.id
+    `;
+    const params = [];
+
     if (search) {
-      query = {
-        $or: [
-          { purchaseNumber: { $regex: search, $options: 'i' } },
-          { notes: { $regex: search, $options: 'i' } }
-        ]
-      };
+      sql += ` WHERE p.purchaseNumber LIKE ? OR p.notes LIKE ?`;
+      const term = `%${search}%`;
+      params.push(term, term);
     }
-    
-    const purchases = await Purchase.find(query)
-      .populate('supplier', 'name phone contactPerson supplierType gstin')
-      .sort({ createdAt: -1 });
-      
-    res.json(purchases);
+
+    sql += ` ORDER BY p.id DESC`;
+
+    const rows = await all(sql, params);
+    res.json(rows.map(mapPurchaseRow));
   } catch (error) {
-    res.status(500).json({ message: 'Server error fetching purchases' });
+    res.status(500).json({ message: 'Server error fetching purchases', error: error.message });
   }
 });
 
 // GET specific purchase by ID
 router.get('/:id', async (req, res) => {
   try {
-    const purchase = await Purchase.findById(req.params.id)
-      .populate('supplier')
-      .populate('items.product');
-      
-    if (!purchase) {
+    const row = await get(`
+      SELECT 
+        p.*,
+        s.name as supplierName,
+        s.phone as supplierPhone,
+        s.contactPerson as supplierContact,
+        s.supplierType as supplierType,
+        s.gstin as supplierGstin
+      FROM purchases p
+      LEFT JOIN suppliers s ON p.supplierId = s.id
+      WHERE p.id = ?
+    `, [req.params.id]);
+
+    if (!row) {
       return res.status(404).json({ message: 'Purchase not found' });
     }
+
+    const purchase = mapPurchaseRow(row);
+
+    const items = await all(`
+      SELECT 
+        pi.*,
+        pi.productId as product,
+        p.name as productName,
+        p.variant
+      FROM purchase_items pi
+      LEFT JOIN products p ON pi.productId = p.id
+      WHERE pi.purchaseId = ?
+    `, [req.params.id]);
+
+    purchase.items = items.map(item => ({
+      ...item,
+      product: {
+        _id: item.productId,
+        id: item.productId,
+        name: item.productName,
+        variant: item.variant
+      }
+    }));
+
     res.json(purchase);
   } catch (error) {
-    res.status(500).json({ message: 'Server error fetching purchase details' });
+    res.status(500).json({ message: 'Server error fetching purchase details', error: error.message });
   }
 });
 
@@ -55,7 +125,7 @@ router.post('/', async (req, res) => {
     }
 
     // Verify supplier exists
-    const existingSupplier = await Supplier.findById(supplier);
+    const existingSupplier = await get(`SELECT * FROM suppliers WHERE id = ?`, [supplier]);
     if (!existingSupplier) {
       return res.status(404).json({ message: 'Supplier not found' });
     }
@@ -68,78 +138,87 @@ router.post('/', async (req, res) => {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const purchaseNumber = `PUR-${dateStr}-${randomSuffix}`;
 
-    let subtotal = 0;
-    let tax = 0;
-    let total = 0;
-    const processedItems = [];
+    const processedPurchase = await transaction(async () => {
+      let subtotal = 0;
+      let tax = 0;
+      let total = 0;
+      const processedItems = [];
 
-    // Batch-fetch all products referenced in the purchase in a single query
-    const productIds = items.map(item => item.product);
-    const productDocs = await Product.find({ _id: { $in: productIds } });
-    const productMap = new Map(productDocs.map(p => [p._id.toString(), p]));
+      for (const item of items) {
+        const prodId = item.product._id || item.product;
+        const product = await get(`SELECT * FROM products WHERE id = ?`, [prodId]);
+        if (!product) {
+          throw new Error(`Product ${item.productName || 'with ID ' + prodId} not found`);
+        }
 
-    // Begin processing each item
-    for (const item of items) {
-      const product = productMap.get(item.product.toString ? item.product.toString() : item.product);
-      if (!product) {
-        return res.status(404).json({ message: `Product ${item.productName} not found` });
+        const itemQty = Number(item.quantity);
+        const itemPurchasePrice = Number(item.purchasePrice);
+        const itemSellingPrice = Number(item.sellingPrice);
+        const itemGst = isGstPurchase ? Number(item.gstRate !== undefined ? item.gstRate : (product.gstRate ?? 12)) : 0;
+        
+        const itemSubtotal = itemQty * itemPurchasePrice;
+        const itemTax = itemSubtotal * (itemGst / 100);
+        const itemTotal = itemSubtotal + itemTax;
+
+        subtotal += itemSubtotal;
+        tax += itemTax;
+        total += itemTotal;
+
+        processedItems.push({
+          productId: product.id,
+          productName: product.name,
+          variant: product.variant || '',
+          barcode: product.barcode,
+          quantity: itemQty,
+          purchasePrice: itemPurchasePrice,
+          sellingPrice: itemSellingPrice,
+          gstRate: itemGst,
+          total: itemTotal
+        });
+
+        // Update product inventory levels (GST Stock vs Non-GST Stock)
+        let newGstStock = product.gstStock || 0;
+        let newNonGstStock = product.nonGstStock || 0;
+
+        if (isGstPurchase) {
+          newGstStock += itemQty;
+        } else {
+          newNonGstStock += itemQty;
+        }
+        const newStock = newGstStock + newNonGstStock;
+
+        await run(
+          `UPDATE products 
+           SET gstStock = ?, nonGstStock = ?, stock = ?, purchasePrice = ?, sellingPrice = ?, updatedAt = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+          [newGstStock, newNonGstStock, newStock, itemPurchasePrice, itemSellingPrice, product.id]
+        );
       }
 
-      const itemQty = Number(item.quantity);
-      const itemPurchasePrice = Number(item.purchasePrice);
-      const itemSellingPrice = Number(item.sellingPrice);
-      
-      // If purchase is GST purchase, use line GST rate (or product rate); if Non-GST, rate is 0%
-      const itemGst = isGstPurchase ? Number(item.gstRate !== undefined ? item.gstRate : (product.gstRate ?? 12)) : Number(item.gstRate || 0);
-      
-      const itemSubtotal = itemQty * itemPurchasePrice;
-      const itemTax = itemSubtotal * (itemGst / 100);
-      const itemTotal = itemSubtotal + itemTax;
+      const finalDate = invoiceDate || new Date().toISOString();
+      const finalNotes = notes || '';
+      const finalMethod = paymentMethod || 'Cash';
 
-      subtotal += itemSubtotal;
-      tax += itemTax;
-      total += itemTotal;
+      // Insert purchase
+      const { id: purchaseId } = await run(
+        `INSERT INTO purchases (purchaseNumber, supplierId, purchaseTaxType, subtotal, tax, total, paymentMethod, status, invoiceDate, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [purchaseNumber, supplier, isGstPurchase ? 'GST' : 'Non-GST', subtotal, tax, total, finalMethod, 'Received', finalDate, finalNotes]
+      );
 
-      processedItems.push({
-        product: product._id,
-        productName: product.name,
-        variant: product.variant || '',
-        barcode: product.barcode,
-        quantity: itemQty,
-        purchasePrice: itemPurchasePrice,
-        sellingPrice: itemSellingPrice,
-        gstRate: itemGst,
-        total: itemTotal
-      });
-
-      // Update product inventory levels (GST Stock vs Non-GST Stock)
-      if (isGstPurchase) {
-        product.gstStock = (product.gstStock || 0) + itemQty;
-      } else {
-        product.nonGstStock = (product.nonGstStock || 0) + itemQty;
+      // Insert purchase items
+      for (const pi of processedItems) {
+        await run(
+          `INSERT INTO purchase_items (purchaseId, productId, productName, variant, barcode, quantity, purchasePrice, sellingPrice, gstRate, total)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [purchaseId, pi.productId, pi.productName, pi.variant, pi.barcode, pi.quantity, pi.purchasePrice, pi.sellingPrice, pi.gstRate, pi.total]
+        );
       }
-      product.stock = (product.gstStock || 0) + (product.nonGstStock || 0);
-      product.purchasePrice = itemPurchasePrice;
-      product.sellingPrice = itemSellingPrice;
-      await product.save();
-    }
 
-    const newPurchase = new Purchase({
-      purchaseNumber,
-      supplier,
-      purchaseTaxType: isGstPurchase ? 'GST' : 'Non-GST',
-      items: processedItems,
-      subtotal,
-      tax,
-      total,
-      paymentMethod: paymentMethod || 'Cash',
-      notes: notes || '',
-      status: 'Received',
-      invoiceDate: invoiceDate || new Date()
+      return { purchaseId, purchaseNumber, supplier, purchaseTaxType: isGstPurchase ? 'GST' : 'Non-GST', subtotal, tax, total, paymentMethod: finalMethod, notes: finalNotes, invoiceDate: finalDate };
     });
 
-    const savedPurchase = await newPurchase.save();
-    res.status(201).json(savedPurchase);
+    res.status(201).json({ _id: processedPurchase.purchaseId, ...processedPurchase });
   } catch (error) {
     res.status(500).json({ message: error.message || 'Server error recording purchase' });
   }
@@ -148,7 +227,7 @@ router.post('/', async (req, res) => {
 // POST trigger purchase return
 router.post('/:id/return', async (req, res) => {
   try {
-    const purchase = await Purchase.findById(req.params.id).populate('supplier');
+    const purchase = await get(`SELECT * FROM purchases WHERE id = ?`, [req.params.id]);
     if (!purchase) {
       return res.status(404).json({ message: 'Purchase not found' });
     }
@@ -157,29 +236,45 @@ router.post('/:id/return', async (req, res) => {
       return res.status(400).json({ message: 'This purchase has already been fully returned' });
     }
 
-    const isGstPurchase = purchase.purchaseTaxType ? (purchase.purchaseTaxType === 'GST') : (purchase.supplier?.supplierType === 'GST' || Boolean(purchase.supplier?.gstin));
+    const items = await all(`SELECT * FROM purchase_items WHERE purchaseId = ?`, [req.params.id]);
+    const isGstPurchase = purchase.purchaseTaxType === 'GST';
 
-    // Process return: reduce stock of all items in this purchase
-    for (const item of purchase.items) {
-      const product = await Product.findById(item.product);
-      if (product) {
-        if (isGstPurchase) {
-          const deductQty = Math.min(product.gstStock || 0, item.quantity);
-          product.gstStock = Math.max(0, (product.gstStock || 0) - deductQty);
-        } else {
-          const deductQty = Math.min(product.nonGstStock || 0, item.quantity);
-          product.nonGstStock = Math.max(0, (product.nonGstStock || 0) - deductQty);
+    await transaction(async () => {
+      // Process return: reduce stock of all items in this purchase
+      for (const item of items) {
+        if (item.productId) {
+          const product = await get(`SELECT * FROM products WHERE id = ?`, [item.productId]);
+          if (product) {
+            let newGstStock = product.gstStock || 0;
+            let newNonGstStock = product.nonGstStock || 0;
+
+            if (isGstPurchase) {
+              const deductQty = Math.min(newGstStock, item.quantity);
+              newGstStock = Math.max(0, newGstStock - deductQty);
+            } else {
+              const deductQty = Math.min(newNonGstStock, item.quantity);
+              newNonGstStock = Math.max(0, newNonGstStock - deductQty);
+            }
+            const newStock = newGstStock + newNonGstStock;
+
+            await run(
+              `UPDATE products SET gstStock = ?, nonGstStock = ?, stock = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+              [newGstStock, newNonGstStock, newStock, product.id]
+            );
+          }
         }
-        product.stock = (product.gstStock || 0) + (product.nonGstStock || 0);
-        await product.save();
       }
-    }
 
-    purchase.status = 'Returned';
-    const updatedPurchase = await purchase.save();
-    res.json(updatedPurchase);
+      await run(
+        `UPDATE purchases SET status = 'Returned', updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+        [req.params.id]
+      );
+    });
+
+    const updated = await get(`SELECT * FROM purchases WHERE id = ?`, [req.params.id]);
+    res.json(mapPurchaseRow(updated));
   } catch (error) {
-    res.status(500).json({ message: 'Server error returning purchase' });
+    res.status(500).json({ message: 'Server error returning purchase', error: error.message });
   }
 });
 

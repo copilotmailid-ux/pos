@@ -1,27 +1,34 @@
-const mongoose = require('mongoose');
-const dotenv = require('dotenv');
+const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
+const dbPath = process.env.SQLITE_DB_PATH || path.join(__dirname, '..', 'database.sqlite');
+console.log('Checking database at:', dbPath);
 
-const Sale = require('../models/Sale');
-const SaleItem = require('../models/SaleItem');
+const db = new sqlite3.Database(dbPath);
+
+const all = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+};
 
 const check = async () => {
   try {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log('Connected to DB');
-
-    const sales = await Sale.find().populate('items');
-
+    const sales = await all(`SELECT * FROM sales`);
+    
     let sumSalesTax = 0;
     let sumGstReportTax = 0;
     let sumNonGstReportTax = 0;
 
     for (const s of sales) {
       sumSalesTax += s.taxAmount;
-      for (const item of s.items) {
-        // GST report tax calculation logic:
+      const items = await all(`SELECT * FROM sale_items WHERE saleId = ?`, [s.id]);
+      
+      for (const item of items) {
         const effectiveGstQty = Math.max(0, (item.gstQuantity !== undefined ? item.gstQuantity : item.quantity) - (item.returnedQuantity || 0));
         if (effectiveGstQty > 0) {
           const itemSub = item.price * effectiveGstQty;
@@ -29,7 +36,6 @@ const check = async () => {
           sumGstReportTax += itemSub * (rate / 100);
         }
 
-        // Non-GST report tax calculation logic:
         const returnedNonGstQty = Math.max(0, (item.returnedQuantity || 0) - (item.gstQuantity || 0));
         const effectiveNonGstQty = Math.max(0, (item.nonGstQuantity || 0) - returnedNonGstQty);
         if (effectiveNonGstQty > 0) {
@@ -45,6 +51,7 @@ const check = async () => {
     console.log('Sum of Non-GST Report Tax:', sumNonGstReportTax);
     console.log('Sum of GST + Non-GST:', sumGstReportTax + sumNonGstReportTax);
 
+    db.close();
     process.exit(0);
   } catch (err) {
     console.error(err);

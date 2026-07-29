@@ -1,6 +1,5 @@
 const express = require('express');
-const Customer = require('../models/Customer');
-const Sale = require('../models/Sale');
+const { get, all, run } = require('../config/db');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -14,50 +13,28 @@ router.use(protect);
 router.get('/', async (req, res) => {
   try {
     const { search } = req.query;
+    let sql = `
+      SELECT 
+        c.id as _id,
+        c.name,
+        c.mobile,
+        COUNT(s.id) as totalVisits,
+        COALESCE(SUM(s.grandTotal), 0) as totalSpend,
+        MAX(s.createdAt) as lastVisit
+      FROM customers c
+      LEFT JOIN sales s ON c.mobile = s.customerMobile AND s.customerMobile != ''
+    `;
+    const params = [];
 
-    // Fetch all customers from DB
-    const dbCustomers = await Customer.find().sort({ createdAt: -1 }).lean();
-
-    // Fetch aggregated sales metrics grouped by customer mobile
-    const salesData = await Sale.aggregate([
-      { $match: { customerMobile: { $ne: '' } } },
-      {
-        $group: {
-          _id: '$customerMobile',
-          totalVisits: { $sum: 1 },
-          totalSpend: { $sum: '$grandTotal' },
-          lastVisit: { $max: '$createdAt' }
-        }
-      }
-    ]);
-
-    // Create a map for fast lookup of metrics
-    const salesMap = new Map(salesData.map(s => [s._id, s]));
-
-    // Merge manual customers with aggregated visit metrics
-    let merged = dbCustomers.map(c => {
-      const stats = salesMap.get(c.mobile) || { totalVisits: 0, totalSpend: 0, lastVisit: null };
-      return {
-        _id: c._id,
-        name: c.name,
-        mobile: c.mobile,
-        totalVisits: stats.totalVisits,
-        totalSpend: stats.totalSpend,
-        lastVisit: stats.lastVisit
-      };
-    });
-
-    // Handle text query filtering (search by name or mobile)
     if (search) {
-      const query = search.toLowerCase();
-      merged = merged.filter(
-        c => 
-          c.mobile.includes(query) || 
-          c.name.toLowerCase().includes(query)
-      );
+      sql += ` WHERE c.name LIKE ? OR c.mobile LIKE ?`;
+      params.push(`%${search}%`, `%${search}%`);
     }
 
-    res.json(merged);
+    sql += ` GROUP BY c.id, c.name, c.mobile ORDER BY c.id DESC`;
+
+    const customers = await all(sql, params);
+    res.json(customers);
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -68,7 +45,10 @@ router.get('/', async (req, res) => {
 // @access  Private
 router.get('/lookup/:mobile', async (req, res) => {
   try {
-    const customer = await Customer.findOne({ mobile: req.params.mobile });
+    const customer = await get(
+      `SELECT id as _id, name, mobile FROM customers WHERE mobile = ?`,
+      [req.params.mobile]
+    );
     if (!customer) {
       return res.status(404).json({ message: 'Customer not found' });
     }
@@ -90,13 +70,17 @@ router.post('/', async (req, res) => {
     }
 
     // Check if customer already exists
-    const existing = await Customer.findOne({ mobile });
+    const existing = await get(`SELECT id FROM customers WHERE mobile = ?`, [mobile]);
     if (existing) {
       return res.status(400).json({ message: 'A customer with this mobile number already exists' });
     }
 
-    const customer = await Customer.create({ name, mobile });
-    res.status(201).json(customer);
+    const { id } = await run(
+      `INSERT INTO customers (name, mobile) VALUES (?, ?)`,
+      [name.trim(), mobile.trim()]
+    );
+
+    res.status(201).json({ _id: id, name, mobile });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -109,24 +93,27 @@ router.put('/:id', async (req, res) => {
   try {
     const { name, mobile } = req.body;
     
-    const customer = await Customer.findById(req.params.id);
+    const customer = await get(`SELECT id, name, mobile FROM customers WHERE id = ?`, [req.params.id]);
     if (!customer) {
       return res.status(404).json({ message: 'Customer not found' });
     }
 
-    // Check unique constraint if mobile changed
+    let finalMobile = customer.mobile;
     if (mobile && mobile !== customer.mobile) {
-      const existing = await Customer.findOne({ mobile });
+      const existing = await get(`SELECT id FROM customers WHERE mobile = ?`, [mobile]);
       if (existing) {
         return res.status(400).json({ message: 'Another customer is registered with this mobile number' });
       }
-      customer.mobile = mobile;
+      finalMobile = mobile;
     }
 
-    customer.name = name || customer.name;
-    const updated = await customer.save();
+    const finalName = name || customer.name;
+    await run(
+      `UPDATE customers SET name = ?, mobile = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+      [finalName, finalMobile, req.params.id]
+    );
 
-    res.json(updated);
+    res.json({ _id: req.params.id, name: finalName, mobile: finalMobile });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -137,12 +124,12 @@ router.put('/:id', async (req, res) => {
 // @access  Private
 router.delete('/:id', async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id);
+    const customer = await get(`SELECT id FROM customers WHERE id = ?`, [req.params.id]);
     if (!customer) {
       return res.status(404).json({ message: 'Customer not found' });
     }
 
-    await customer.deleteOne();
+    await run(`DELETE FROM customers WHERE id = ?`, [req.params.id]);
     res.json({ message: 'Customer removed successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });

@@ -13,7 +13,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "mongoose": "^8.9.5"
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -29,6 +29,7 @@
       "client/dist/**/*"
     ],
     "asar": false,
+    "npmRebuild": false,
     "directories": {
       "output": "dist-desktop"
     },

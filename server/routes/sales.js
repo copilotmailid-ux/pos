@@ -1,18 +1,35 @@
 const express = require('express');
-const mongoose = require('mongoose');
-const Sale = require('../models/Sale');
-const SaleItem = require('../models/SaleItem');
-const Product = require('../models/Product');
-const Customer = require('../models/Customer');
+const { get, all, run, transaction } = require('../config/db');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
+router.use(protect);
 
-// Precision helper: round monetary values to 2 decimal places
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-// All routes are protected
-router.use(protect);
+// Helper to retrieve a complete sale populated with items in the MongoDB style
+const getCompleteSale = async (saleId) => {
+  const sale = await get(`SELECT * FROM sales WHERE id = ?`, [saleId]);
+  if (!sale) return null;
+
+  const items = await all(`SELECT * FROM sale_items WHERE saleId = ?`, [saleId]);
+
+  return {
+    ...sale,
+    _id: sale.id,
+    items: items.map(item => ({
+      ...item,
+      _id: item.id,
+      product: {
+        _id: item.productId,
+        id: item.productId,
+        name: item.productName,
+        variant: item.variant,
+        barcode: item.barcode
+      }
+    }))
+  };
+};
 
 // @route   POST /api/sales
 // @desc    Create a new sale with full customer billing and internal report tax partitioning
@@ -24,182 +41,126 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ message: 'No items in the sale' });
   }
 
-  // Detect transaction capability (Requires replica set / type !== 'Single')
-  let session = null;
-  let useTransaction = false;
   try {
-    const client = mongoose.connection.getClient();
-    const topologyType = client?.topology?.description?.type;
-    if (topologyType && topologyType !== 'Single') {
-      session = await mongoose.startSession();
-      session.startTransaction();
-      useTransaction = true;
-    }
-  } catch (err) {
-    if (session) {
-      session.endSession();
-      session = null;
-    }
-    useTransaction = false;
-  }
-
-  try {
-    const mongoose = require('mongoose');
-
-    // Auto-Register customer in Database if mobile is provided and doesn't exist
-    if (customerMobile && customerName) {
-      const existingCustomer = await Customer.findOne({ mobile: customerMobile.trim() }).session(session);
-      if (!existingCustomer) {
-        await Customer.create([{
-          name: customerName.trim(),
-          mobile: customerMobile.trim(),
-        }], { session });
-      }
-    }
-
-    // Calculate totals
-    let subtotal = 0;
-    let gstSubtotal = 0;
-    let nonGstSubtotal = 0;
-    let totalTax = 0; // Full tax billed to customer
-    let reportGstTaxSum = 0; // Tax for GST Tax Report (Supplier A portion)
-    let reportNonGstAmountSum = 0; // Non-GST report amount (Supplier B portion)
-
-    const saleItemsData = [];
-
-    for (const item of items) {
-      // Find product in transaction session
-      const product = await Product.findById(item.productId).session(session);
-
-      if (!product) {
-        throw new Error(`Product not found: ${item.productId}`);
+    const processedSale = await transaction(async () => {
+      // 1. Auto-Register customer in Database if mobile is provided and doesn't exist
+      if (customerMobile && customerName) {
+        const existingCustomer = await get(`SELECT id FROM customers WHERE mobile = ?`, [customerMobile.trim()]);
+        if (!existingCustomer) {
+          await run(
+            `INSERT INTO customers (name, mobile) VALUES (?, ?)`,
+            [customerName.trim(), customerMobile.trim()]
+          );
+        }
       }
 
-      const totalQtyNeeded = Number(item.quantity);
-      if (product.stock < totalQtyNeeded) {
-        throw new Error(`Insufficient stock for ${product.name}. Available: ${product.stock}`);
+      // 2. Generate unique sequential invoice ID from counters table
+      const counterRow = await get(`SELECT seq FROM counters WHERE id = 'invoiceNo'`);
+      const newSeq = (counterRow?.seq || 0) + 1;
+      await run(`UPDATE counters SET seq = ? WHERE id = 'invoiceNo'`, [newSeq]);
+      const invoiceNo = `INV-${String(newSeq).padStart(5, '0')}`;
+
+      // Calculate totals
+      let subtotal = 0;
+      let gstSubtotal = 0;
+      let nonGstSubtotal = 0;
+      let totalTax = 0;
+      let reportGstTaxSum = 0;
+      let reportNonGstAmountSum = 0;
+
+      const saleItemsData = [];
+
+      for (const item of items) {
+        const prodId = item.productId._id || item.productId;
+        const product = await get(`SELECT * FROM products WHERE id = ?`, [prodId]);
+        if (!product) {
+          throw new Error(`Product not found: ${prodId}`);
+        }
+
+        const totalQtyNeeded = Number(item.quantity);
+        if (product.stock < totalQtyNeeded) {
+          throw new Error(`Insufficient stock for ${product.name}. Available: ${product.stock}`);
+        }
+
+        // FIFO Allocation: allocate from gstStock first, then nonGstStock
+        const currentGstStock = Math.max(0, product.gstStock || 0);
+        const allocGst = Math.min(totalQtyNeeded, currentGstStock);
+        const allocNonGst = totalQtyNeeded - allocGst;
+
+        const newGstStock = Math.max(0, (product.gstStock || 0) - allocGst);
+        const newNonGstStock = Math.max(0, (product.nonGstStock || 0) - allocNonGst);
+        const newStock = newGstStock + newNonGstStock;
+
+        // Perform stock update
+        await run(
+          `UPDATE products SET gstStock = ?, nonGstStock = ?, stock = ? WHERE id = ?`,
+          [newGstStock, newNonGstStock, newStock, product.id]
+        );
+
+        const itemGstRate = product.gstRate ?? 12;
+        const itemSubtotal = round2(product.sellingPrice * totalQtyNeeded);
+        const fullItemTax = round2(itemSubtotal * (itemGstRate / 100));
+
+        const itemGstSubtotal = round2(product.sellingPrice * allocGst);
+        const itemNonGstSubtotal = round2(product.sellingPrice * allocNonGst);
+        
+        const itemReportGstTax = round2(itemGstSubtotal * (itemGstRate / 100));
+        const itemReportNonGstAmount = round2(itemNonGstSubtotal + round2(itemNonGstSubtotal * (itemGstRate / 100)));
+
+        subtotal = round2(subtotal + itemSubtotal);
+        gstSubtotal = round2(gstSubtotal + itemGstSubtotal);
+        nonGstSubtotal = round2(nonGstSubtotal + itemNonGstSubtotal);
+        totalTax = round2(totalTax + fullItemTax);
+        reportGstTaxSum = round2(reportGstTaxSum + itemReportGstTax);
+        reportNonGstAmountSum = round2(reportNonGstAmountSum + itemReportNonGstAmount);
+
+        saleItemsData.push({
+          productId: product.id,
+          productName: product.name,
+          variant: product.variant || '',
+          barcode: product.barcode,
+          quantity: totalQtyNeeded,
+          gstQuantity: allocGst,
+          nonGstQuantity: allocNonGst,
+          price: product.sellingPrice,
+          purchasePrice: product.purchasePrice || 0,
+          gstRate: itemGstRate,
+          taxAmount: fullItemTax,
+          reportGstTax: itemReportGstTax,
+          reportNonGstAmount: itemReportNonGstAmount,
+          total: round2(itemSubtotal + fullItemTax),
+        });
       }
 
-      // FIFO Allocation: allocate from gstStock first, then nonGstStock
-      const currentGstStock = Math.max(0, product.gstStock || 0);
-      const allocGst = Math.min(totalQtyNeeded, currentGstStock);
-      const allocNonGst = totalQtyNeeded - allocGst;
+      const cgstAmount = round2(totalTax / 2);
+      const sgstAmount = round2(totalTax / 2);
+      const grandTotal = round2(subtotal + totalTax);
 
-      const newGstStock = Math.max(0, (product.gstStock || 0) - allocGst);
-      const newNonGstStock = Math.max(0, (product.nonGstStock || 0) - allocNonGst);
-      const newStock = newGstStock + newNonGstStock;
+      const finalAmountPaid = amountPaid !== undefined ? Number(amountPaid) : grandTotal;
+      const finalChangeReturned = changeReturned !== undefined ? Number(changeReturned) : 0;
 
-      // Atomic update matching the checked stock constraint to block concurrent overselling
-      const updatedProduct = await Product.findOneAndUpdate(
-        { _id: item.productId, stock: { $gte: totalQtyNeeded } },
-        { 
-          $set: { 
-            gstStock: newGstStock, 
-            nonGstStock: newNonGstStock, 
-            stock: newStock 
-          } 
-        },
-        { session, new: true }
+      // Insert sale
+      const { id: saleId } = await run(
+        `INSERT INTO sales (invoiceNo, customerMobile, customerName, paymentMethod, amountPaid, changeReturned, subtotal, gstSubtotal, nonGstSubtotal, taxAmount, cgstAmount, sgstAmount, grandTotal, reportGstTax, reportNonGstAmount, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [invoiceNo, customerMobile || '', customerName || '', paymentMethod || 'Cash Tendered', finalAmountPaid, finalChangeReturned, subtotal, gstSubtotal, nonGstSubtotal, totalTax, cgstAmount, sgstAmount, grandTotal, reportGstTaxSum, reportNonGstAmountSum, 'Completed']
       );
 
-      if (!updatedProduct) {
-        throw new Error(`Concurrency stock conflict or insufficient stock for ${product.name}`);
+      // Insert sale items
+      for (const si of saleItemsData) {
+        await run(
+          `INSERT INTO sale_items (saleId, productId, productName, variant, barcode, quantity, gstQuantity, nonGstQuantity, price, purchasePrice, total, gstRate, taxAmount, reportGstTax, reportNonGstAmount)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [saleId, si.productId, si.productName, si.variant, si.barcode, si.quantity, si.gstQuantity, si.nonGstQuantity, si.price, si.purchasePrice, si.total, si.gstRate, si.taxAmount, si.reportGstTax, si.reportNonGstAmount]
+        );
       }
 
-      const itemGstRate = product.gstRate ?? 12;
-      const itemSubtotal = round2(product.sellingPrice * totalQtyNeeded);
-      
-      // Full customer tax on 100% of items
-      const fullItemTax = round2(itemSubtotal * (itemGstRate / 100));
+      return saleId;
+    });
 
-      const itemGstSubtotal = round2(product.sellingPrice * allocGst);
-      const itemNonGstSubtotal = round2(product.sellingPrice * allocNonGst);
-      
-      // Internal accounting breakdown
-      const itemReportGstTax = round2(itemGstSubtotal * (itemGstRate / 100));
-      const itemReportNonGstAmount = round2(itemNonGstSubtotal + round2(itemNonGstSubtotal * (itemGstRate / 100)));
-
-      subtotal = round2(subtotal + itemSubtotal);
-      gstSubtotal = round2(gstSubtotal + itemGstSubtotal);
-      nonGstSubtotal = round2(nonGstSubtotal + itemNonGstSubtotal);
-      totalTax = round2(totalTax + fullItemTax);
-      reportGstTaxSum = round2(reportGstTaxSum + itemReportGstTax);
-      reportNonGstAmountSum = round2(reportNonGstAmountSum + itemReportNonGstAmount);
-
-      saleItemsData.push({
-        product: product._id,
-        productName: product.name,
-        variant: product.variant || '',
-        barcode: product.barcode,
-        quantity: totalQtyNeeded,
-        gstQuantity: allocGst,
-        nonGstQuantity: allocNonGst,
-        price: product.sellingPrice,
-        purchasePrice: product.purchasePrice || 0,
-        gstRate: itemGstRate,
-        taxAmount: fullItemTax,
-        reportGstTax: itemReportGstTax,
-        reportNonGstAmount: itemReportNonGstAmount,
-        total: round2(itemSubtotal + fullItemTax),
-      });
-    }
-
-    const cgstAmount = round2(totalTax / 2);
-    const sgstAmount = round2(totalTax / 2);
-    const grandTotal = round2(subtotal + totalTax);
-
-    const saleData = {
-      customerMobile: customerMobile || '',
-      customerName: customerName || '',
-      paymentMethod: paymentMethod || 'Cash Tendered',
-      amountPaid: amountPaid !== undefined ? Number(amountPaid) : grandTotal,
-      changeReturned: changeReturned !== undefined ? Number(changeReturned) : 0,
-      subtotal,
-      gstSubtotal,
-      nonGstSubtotal,
-      taxAmount: totalTax,
-      cgstAmount,
-      sgstAmount,
-      grandTotal,
-      reportGstTax: reportGstTaxSum,
-      reportNonGstAmount: reportNonGstAmountSum,
-    };
-
-    // Create the sale with customer & payment metadata (Array syntax required for session creation)
-    const sales = await Sale.create([saleData], { session });
-    const sale = sales[0];
-
-    // Create sale items and link to sale
-    const createdItems = [];
-    for (const itemData of saleItemsData) {
-      const saleItems = await SaleItem.create([{
-        ...itemData,
-        sale: sale._id,
-      }], { session });
-      createdItems.push(saleItems[0]._id);
-    }
-
-    // Update sale with item references
-    sale.items = createdItems;
-    await sale.save({ session });
-
-    if (useTransaction && session) {
-      await session.commitTransaction();
-    }
-    if (session) {
-      session.endSession();
-    }
-
-    // Return the complete sale with populated items
-    const completeSale = await Sale.findById(sale._id).populate('items');
+    const completeSale = await getCompleteSale(processedSale);
     res.status(201).json(completeSale);
   } catch (error) {
-    if (useTransaction && session) {
-      await session.abortTransaction();
-    }
-    if (session) {
-      session.endSession();
-    }
     res.status(400).json({ message: error.message });
   }
 });
@@ -210,43 +171,52 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { search, startDate, endDate, page = 1, limit = 15 } = req.query;
-    let filter = {};
+    let sql = `SELECT * FROM sales`;
+    let countSql = `SELECT COUNT(*) as count FROM sales`;
+    const params = [];
+    const conditions = [];
 
     if (search) {
-      filter.$or = [
-        { invoiceNo: { $regex: search, $options: 'i' } },
-        { customerName: { $regex: search, $options: 'i' } },
-        { customerMobile: { $regex: search, $options: 'i' } },
-      ];
+      conditions.push(`(invoiceNo LIKE ? OR customerName LIKE ? OR customerMobile LIKE ?)`);
+      const term = `%${search}%`;
+      params.push(term, term, term);
     }
 
     if (startDate || endDate) {
-      filter.createdAt = {};
       if (startDate) {
-        const parts = startDate.split('-');
-        filter.createdAt.$gte = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        conditions.push(`createdAt >= ?`);
+        params.push(`${startDate} 00:00:00`);
       }
       if (endDate) {
-        const parts = endDate.split('-');
-        const end = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-        end.setHours(23, 59, 59, 999);
-        filter.createdAt.$lte = end;
+        conditions.push(`createdAt <= ?`);
+        params.push(`${endDate} 23:59:59`);
       }
+    }
+
+    if (conditions.length > 0) {
+      const whereClause = ` WHERE ` + conditions.join(` AND `);
+      sql += whereClause;
+      countSql += whereClause;
     }
 
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = parseInt(limit, 10) || 15;
     const skip = (pageNum - 1) * limitNum;
 
-    const total = await Sale.countDocuments(filter);
-    const sales = await Sale.find(filter)
-      .populate('items')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum);
+    const totalRow = await get(countSql, params);
+    const total = totalRow.count;
+
+    const querySql = sql + ` ORDER BY id DESC LIMIT ? OFFSET ?`;
+    const queryParams = [...params, limitNum, skip];
+
+    const salesRows = await all(querySql, queryParams);
+    const sales = [];
+    for (const row of salesRows) {
+      const populated = await getCompleteSale(row.id);
+      sales.push(populated);
+    }
 
     const pages = Math.ceil(total / limitNum) || 1;
-
     res.json({ sales, total, pages, page: pageNum });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -258,7 +228,7 @@ router.get('/', async (req, res) => {
 // @access  Private
 router.get('/:id', async (req, res) => {
   try {
-    const sale = await Sale.findById(req.params.id).populate('items');
+    const sale = await getCompleteSale(req.params.id);
     if (!sale) {
       return res.status(404).json({ message: 'Sale invoice not found' });
     }
@@ -276,8 +246,7 @@ router.post('/:id/return', async (req, res) => {
     const { items, itemsToReturn, reason } = req.body;
     const targetItems = items || itemsToReturn || [];
 
-    const sale = await Sale.findById(req.params.id).populate('items');
-
+    const sale = await get(`SELECT * FROM sales WHERE id = ?`, [req.params.id]);
     if (!sale) {
       return res.status(404).json({ message: 'Sale invoice not found' });
     }
@@ -286,54 +255,66 @@ router.post('/:id/return', async (req, res) => {
       return res.status(400).json({ message: 'Cannot return items from a cancelled invoice' });
     }
 
-    let refundSum = 0;
+    await transaction(async () => {
+      let refundSum = 0;
 
-    for (const ret of targetItems) {
-      const saleItem = await SaleItem.findById(ret.saleItemId);
-      if (!saleItem) continue;
+      for (const ret of targetItems) {
+        const itemId = ret.saleItemId || ret.id;
+        const saleItem = await get(`SELECT * FROM sale_items WHERE id = ?`, [itemId]);
+        if (!saleItem) continue;
 
-      const returnQty = Number(ret.returnedQty !== undefined ? ret.returnedQty : (ret.quantity || 0));
-      if (returnQty <= 0) continue;
+        const returnQty = Number(ret.returnedQty !== undefined ? ret.returnedQty : (ret.quantity || 0));
+        if (returnQty <= 0) continue;
 
-      const remainingQty = saleItem.quantity - (saleItem.returnedQuantity || 0);
-      const actualReturnQty = Math.min(returnQty, remainingQty);
+        const remainingQty = saleItem.quantity - (saleItem.returnedQuantity || 0);
+        const actualReturnQty = Math.min(returnQty, remainingQty);
 
-      if (actualReturnQty > 0) {
-        saleItem.returnedQuantity = (saleItem.returnedQuantity || 0) + actualReturnQty;
-        await saleItem.save();
+        if (actualReturnQty > 0) {
+          const newReturnedQuantity = (saleItem.returnedQuantity || 0) + actualReturnQty;
+          await run(`UPDATE sale_items SET returnedQuantity = ? WHERE id = ?`, [newReturnedQuantity, saleItem.id]);
 
-        const unitTotal = round2(saleItem.total / saleItem.quantity);
-        refundSum = round2(refundSum + round2(unitTotal * actualReturnQty));
+          const unitTotal = round2(saleItem.total / saleItem.quantity);
+          refundSum = round2(refundSum + round2(unitTotal * actualReturnQty));
 
-        // Restore stock to product (restore to gstStock first if gstQuantity existed, remainder to nonGstStock)
-        const product = await Product.findById(saleItem.product);
-        if (product) {
-          const originalGstQty = saleItem.gstQuantity || 0;
-          const prevReturned = (saleItem.returnedQuantity || 0) - actualReturnQty;
-          const remainingGstQty = Math.max(0, originalGstQty - prevReturned);
+          // Restore stock to product (restore to gstStock first if gstQuantity existed, remainder to nonGstStock)
+          if (saleItem.productId) {
+            const product = await get(`SELECT * FROM products WHERE id = ?`, [saleItem.productId]);
+            if (product) {
+              const originalGstQty = saleItem.gstQuantity || 0;
+              const prevReturned = saleItem.returnedQuantity || 0;
+              const remainingGstQty = Math.max(0, originalGstQty - prevReturned);
 
-          const gstQtyToRestore = Math.min(actualReturnQty, remainingGstQty);
-          const nonGstQtyToRestore = actualReturnQty - gstQtyToRestore;
+              const gstQtyToRestore = Math.min(actualReturnQty, remainingGstQty);
+              const nonGstQtyToRestore = actualReturnQty - gstQtyToRestore;
 
-          product.gstStock = (product.gstStock || 0) + gstQtyToRestore;
-          product.nonGstStock = (product.nonGstStock || 0) + nonGstQtyToRestore;
-          product.stock = product.gstStock + product.nonGstStock;
-          await product.save();
+              const newGstStock = (product.gstStock || 0) + gstQtyToRestore;
+              const newNonGstStock = (product.nonGstStock || 0) + nonGstQtyToRestore;
+              const newStock = newGstStock + newNonGstStock;
+
+              await run(
+                `UPDATE products SET gstStock = ?, nonGstStock = ?, stock = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+                [newGstStock, newNonGstStock, newStock, product.id]
+              );
+            }
+          }
         }
       }
-    }
 
-    sale.returnedAmount = (sale.returnedAmount || 0) + refundSum;
-    sale.returnReason = reason || sale.returnReason || 'Customer Return';
+      const newReturnedAmount = (sale.returnedAmount || 0) + refundSum;
+      const finalReason = reason || sale.returnReason || 'Customer Return';
 
-    // Check if fully returned
-    const allItems = await SaleItem.find({ sale: sale._id });
-    const isFullyReturned = allItems.every(i => i.returnedQuantity >= i.quantity);
+      // Check if fully returned
+      const allItems = await all(`SELECT quantity, returnedQuantity FROM sale_items WHERE saleId = ?`, [sale.id]);
+      const isFullyReturned = allItems.every(i => i.returnedQuantity >= i.quantity);
+      const newStatus = isFullyReturned ? 'Returned' : 'Partially Returned';
 
-    sale.status = isFullyReturned ? 'Returned' : 'Partially Returned';
-    await sale.save();
+      await run(
+        `UPDATE sales SET returnedAmount = ?, returnReason = ?, status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+        [newReturnedAmount, finalReason, newStatus, sale.id]
+      );
+    });
 
-    const updatedSale = await Sale.findById(sale._id).populate('items');
+    const updatedSale = await getCompleteSale(sale.id);
     res.json(updatedSale);
   } catch (error) {
     res.status(500).json({ message: 'Server error processing return', error: error.message });
@@ -352,7 +333,7 @@ router.post('/:id/cancel', async (req, res) => {
       return res.status(401).json({ message: 'Incorrect Admin Password! Cancellation blocked.' });
     }
 
-    const sale = await Sale.findById(req.params.id).populate('items');
+    const sale = await get(`SELECT * FROM sales WHERE id = ?`, [req.params.id]);
     if (!sale) {
       return res.status(404).json({ message: 'Sale invoice not found' });
     }
@@ -361,26 +342,35 @@ router.post('/:id/cancel', async (req, res) => {
       return res.status(400).json({ message: 'Invoice is already cancelled' });
     }
 
-    // Restore stock for all items
-    for (const item of sale.items) {
-      if (!item || !item.product) continue;
-      const product = await Product.findById(item.product);
-      if (product) {
-        const netQtyToRestore = item.quantity - (item.returnedQuantity || 0);
-        const gstQtyToRestore = Math.min(netQtyToRestore, item.gstQuantity || 0);
-        const nonGstQtyToRestore = netQtyToRestore - gstQtyToRestore;
+    const items = await all(`SELECT * FROM sale_items WHERE saleId = ?`, [sale.id]);
 
-        product.gstStock = (product.gstStock || 0) + gstQtyToRestore;
-        product.nonGstStock = (product.nonGstStock || 0) + nonGstQtyToRestore;
-        product.stock = product.gstStock + product.nonGstStock;
-        await product.save();
+    await transaction(async () => {
+      // Restore stock for all items
+      for (const item of items) {
+        if (item.productId) {
+          const product = await get(`SELECT * FROM products WHERE id = ?`, [item.productId]);
+          if (product) {
+            const netQtyToRestore = item.quantity - (item.returnedQuantity || 0);
+            const gstQtyToRestore = Math.min(netQtyToRestore, item.gstQuantity || 0);
+            const nonGstQtyToRestore = netQtyToRestore - gstQtyToRestore;
+
+            const newGstStock = (product.gstStock || 0) + gstQtyToRestore;
+            const newNonGstStock = (product.nonGstStock || 0) + nonGstQtyToRestore;
+            const newStock = newGstStock + newNonGstStock;
+
+            await run(
+              `UPDATE products SET gstStock = ?, nonGstStock = ?, stock = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+              [newGstStock, newNonGstStock, newStock, product.id]
+            );
+          }
+        }
       }
-    }
 
-    sale.status = 'Cancelled';
-    await sale.save();
+      await run(`UPDATE sales SET status = 'Cancelled', updatedAt = CURRENT_TIMESTAMP WHERE id = ?`, [sale.id]);
+    });
 
-    res.json({ message: 'Invoice cancelled successfully', sale });
+    const updated = await getCompleteSale(sale.id);
+    res.json({ message: 'Invoice cancelled successfully', sale: updated });
   } catch (error) {
     res.status(500).json({ message: 'Server error cancelling sale', error: error.message });
   }

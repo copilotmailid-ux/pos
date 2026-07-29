@@ -1,48 +1,115 @@
 const express = require('express');
-const router = express.Router();
-const Sale = require('../models/Sale');
-const SaleItem = require('../models/SaleItem');
-const Purchase = require('../models/Purchase');
-const Product = require('../models/Product');
-const Supplier = require('../models/Supplier');
-const Customer = require('../models/Customer');
+const { get, all } = require('../config/db');
 const { protect } = require('../middleware/auth');
 
+const router = express.Router();
 router.use(protect);
 
-// Precision helper: round monetary values to 2 decimal places
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-// Helper to construct date filters (parses date strings as local timezone, not UTC)
-const parseLocalDate = (dateStr) => {
-  const parts = dateStr.split('-');
-  return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-};
+// Helper to get populated sales in the same format as MongoDB (Optimized to avoid N+1 queries)
+const getPopulatedSales = async (conditions, params) => {
+  let sql = `SELECT * FROM sales`;
+  if (conditions.length > 0) {
+    sql += ` WHERE ` + conditions.join(' AND ');
+  }
+  sql += ` ORDER BY id ASC`;
+  const sales = await all(sql, params);
+  if (sales.length === 0) return [];
 
-const buildDateFilter = (startDate, endDate, dateField = 'createdAt') => {
-  let filter = {};
-  if (startDate || endDate) {
-    filter[dateField] = {};
-    if (startDate) {
-      filter[dateField].$gte = parseLocalDate(startDate);
-    }
-    if (endDate) {
-      const end = parseLocalDate(endDate);
-      end.setHours(23, 59, 59, 999);
-      filter[dateField].$lte = end;
+  const saleIds = sales.map(s => s.id);
+  const itemsMap = new Map();
+  const batchSize = 500;
+
+  for (let i = 0; i < saleIds.length; i += batchSize) {
+    const batchIds = saleIds.slice(i, i + batchSize);
+    const placeholders = batchIds.map(() => '?').join(',');
+    const items = await all(`SELECT * FROM sale_items WHERE saleId IN (${placeholders})`, batchIds);
+    for (const item of items) {
+      if (!itemsMap.has(item.saleId)) {
+        itemsMap.set(item.saleId, []);
+      }
+      itemsMap.get(item.saleId).push({
+        ...item,
+        _id: item.id,
+        product: {
+          _id: item.productId,
+          id: item.productId,
+          name: item.productName,
+          variant: item.variant,
+          barcode: item.barcode
+        }
+      });
     }
   }
-  return filter;
+
+  for (const sale of sales) {
+    sale._id = sale.id;
+    sale.items = itemsMap.get(sale.id) || [];
+  }
+  return sales;
+};
+
+// Helper to get populated purchases in the same format as MongoDB
+const getPopulatedPurchases = async (conditions, params) => {
+  let sql = `
+    SELECT 
+      p.*,
+      s.name as supplierName, s.phone as supplierPhone, s.contactPerson as supplierContact, s.supplierType as supplierType, s.gstin as supplierGstin
+    FROM purchases p
+    LEFT JOIN suppliers s ON p.supplierId = s.id
+  `;
+  if (conditions.length > 0) {
+    sql += ` WHERE ` + conditions.join(' AND ');
+  }
+  sql += ` ORDER BY p.id ASC`;
+  const rows = await all(sql, params);
+  return rows.map(row => ({
+    _id: row.id,
+    id: row.id,
+    purchaseNumber: row.purchaseNumber,
+    purchaseTaxType: row.purchaseTaxType,
+    subtotal: row.subtotal,
+    tax: row.tax,
+    total: row.total,
+    paymentMethod: row.paymentMethod,
+    status: row.status,
+    notes: row.notes,
+    invoiceDate: row.invoiceDate,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    supplier: {
+      _id: row.supplierId,
+      id: row.supplierId,
+      name: row.supplierName || 'Unknown Supplier',
+      phone: row.supplierPhone || '',
+      contactPerson: row.supplierContact || '',
+      supplierType: row.supplierType || 'GST',
+      gstin: row.supplierGstin || ''
+    }
+  }));
+};
+
+const addDateConditions = (conditions, params, startDate, endDate, dateField) => {
+  if (startDate) {
+    conditions.push(`${dateField} >= ?`);
+    params.push(`${startDate} 00:00:00`);
+  }
+  if (endDate) {
+    conditions.push(`${dateField} <= ?`);
+    params.push(`${endDate} 23:59:59`);
+  }
 };
 
 // 1. Sales Report Endpoint (All Sales)
 router.get('/sales', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const dateFilter = buildDateFilter(startDate, endDate, 'createdAt');
-    const filter = { ...dateFilter, status: { $ne: 'Cancelled' } };
+    const conditions = [`status != 'Cancelled'`];
+    const params = [];
+    addDateConditions(conditions, params, startDate, endDate, 'createdAt');
 
-    const sales = await Sale.find(filter).sort({ createdAt: 1 }).populate('items');
+    const sales = await getPopulatedSales(conditions, params);
     res.json(sales);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching sales report data', error: error.message });
@@ -53,10 +120,11 @@ router.get('/sales', async (req, res) => {
 router.get('/purchases', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const dateFilter = buildDateFilter(startDate, endDate, 'invoiceDate');
-    const filter = { ...dateFilter };
+    const conditions = [];
+    const params = [];
+    addDateConditions(conditions, params, startDate, endDate, 'invoiceDate');
 
-    const purchases = await Purchase.find(filter).populate('supplier', 'name gstin supplierType').sort({ invoiceDate: 1 });
+    const purchases = await getPopulatedPurchases(conditions, params);
     res.json(purchases);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching purchase report data', error: error.message });
@@ -68,11 +136,16 @@ router.get('/gst', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     
-    const salesFilter = { ...buildDateFilter(startDate, endDate, 'createdAt'), status: { $ne: 'Cancelled' } };
-    const purchasesFilter = { ...buildDateFilter(startDate, endDate, 'invoiceDate'), status: { $ne: 'Returned' } };
+    const salesConditions = [`status != 'Cancelled'`];
+    const salesParams = [];
+    addDateConditions(salesConditions, salesParams, startDate, endDate, 'createdAt');
 
-    const sales = await Sale.find(salesFilter).populate('items');
-    const purchases = await Purchase.find(purchasesFilter).populate('supplier');
+    const purchasesConditions = [`status != 'Returned'`];
+    const purchasesParams = [];
+    addDateConditions(purchasesConditions, purchasesParams, startDate, endDate, 'invoiceDate');
+
+    const sales = await getPopulatedSales(salesConditions, salesParams);
+    const purchases = await getPopulatedPurchases(purchasesConditions, purchasesParams);
 
     // Itemized GST sales: filter for items where gstQuantity > 0
     const gstSaleLines = [];
@@ -112,10 +185,11 @@ router.get('/gst', async (req, res) => {
 router.get('/gst-summary', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const dateFilter = buildDateFilter(startDate, endDate, 'createdAt');
-    const filter = { ...dateFilter, status: { $ne: 'Cancelled' } };
+    const conditions = [`status != 'Cancelled'`];
+    const params = [];
+    addDateConditions(conditions, params, startDate, endDate, 'createdAt');
 
-    const sales = await Sale.find(filter).populate('items');
+    const sales = await getPopulatedSales(conditions, params);
 
     const defaultSlabs = [0, 5, 12, 18, 28];
     const slabs = {};
@@ -189,10 +263,11 @@ router.get('/gst-summary', async (req, res) => {
 router.get('/non-gst', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const dateFilter = buildDateFilter(startDate, endDate, 'createdAt');
-    const filter = { ...dateFilter, status: { $ne: 'Cancelled' } };
+    const conditions = [`status != 'Cancelled'`];
+    const params = [];
+    addDateConditions(conditions, params, startDate, endDate, 'createdAt');
 
-    const sales = await Sale.find(filter).populate('items');
+    const sales = await getPopulatedSales(conditions, params);
 
     const nonGstLines = [];
     for (const sale of sales) {
@@ -233,7 +308,7 @@ router.get('/non-gst', async (req, res) => {
 // 5. Stock Valuation Report Endpoint (shows breakdown of GST Stock vs Non-GST Stock)
 router.get('/stock', async (req, res) => {
   try {
-    const products = await Product.find({}).sort({ name: 1 });
+    const products = await all(`SELECT id as _id, * FROM products ORDER BY name ASC`);
     res.json(products);
   } catch (error) {
     res.status(500).json({ message: 'Error generating stock report data', error: error.message });
@@ -248,16 +323,18 @@ router.get('/supplier-ledger', async (req, res) => {
       return res.status(400).json({ message: 'Supplier ID is required' });
     }
 
-    const supplier = await Supplier.findById(supplierId);
+    const supplier = await get(`SELECT * FROM suppliers WHERE id = ?`, [supplierId]);
     if (!supplier) {
       return res.status(404).json({ message: 'Supplier not found' });
     }
 
-    const dateFilter = buildDateFilter(startDate, endDate, 'invoiceDate');
-    const filter = { ...dateFilter, supplier: supplierId };
+    const conditions = [`supplierId = ?`];
+    const params = [supplierId];
+    addDateConditions(conditions, params, startDate, endDate, 'invoiceDate');
 
-    const transactions = await Purchase.find(filter).sort({ invoiceDate: 1 });
-    res.json({ supplier, transactions });
+    const transactions = await getPopulatedPurchases(conditions, params);
+    
+    res.json({ supplier: { ...supplier, _id: supplier.id }, transactions });
   } catch (error) {
     res.status(500).json({ message: 'Error loading supplier ledger', error: error.message });
   }
@@ -271,14 +348,27 @@ router.get('/customer-ledger', async (req, res) => {
       return res.status(400).json({ message: 'Customer mobile is required' });
     }
 
-    const customer = await Customer.findOne({ mobile: mobile.trim() });
-    const dateFilter = buildDateFilter(startDate, endDate, 'createdAt');
-    const filter = { ...dateFilter, customerMobile: mobile.trim() };
+    const customer = await get(`SELECT * FROM customers WHERE mobile = ?`, [mobile.trim()]);
+    
+    const conditions = [`customerMobile = ?`];
+    const params = [mobile.trim()];
+    addDateConditions(conditions, params, startDate, endDate, 'createdAt');
 
-    const transactions = await Sale.find(filter).sort({ createdAt: 1 });
+    let sql = `SELECT * FROM sales WHERE customerMobile = ?`;
+    const salesParams = [mobile.trim()];
+    if (startDate || endDate) {
+      const datesConditions = [];
+      addDateConditions(datesConditions, salesParams, startDate, endDate, 'createdAt');
+      sql += ` AND ` + datesConditions.join(` AND `);
+    }
+    sql += ` ORDER BY id ASC`;
+
+    const transactions = await all(sql, salesParams);
+    const formattedTransactions = transactions.map(t => ({ ...t, _id: t.id }));
+
     res.json({ 
-      customer: customer || { name: 'Walk-in Customer', mobile }, 
-      transactions 
+      customer: customer ? { ...customer, _id: customer.id } : { name: 'Walk-in Customer', mobile }, 
+      transactions: formattedTransactions
     });
   } catch (error) {
     res.status(500).json({ message: 'Error loading customer ledger', error: error.message });

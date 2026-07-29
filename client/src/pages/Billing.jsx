@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import Receipt from '../components/Receipt';
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import {
   HiOutlineSearch,
   HiOutlineTrash,
@@ -10,7 +9,6 @@ import {
   HiOutlineMinus,
   HiOutlineShoppingCart,
   HiOutlineX,
-  HiOutlineCamera,
   HiOutlineDeviceMobile,
   HiOutlineBookmark,
   HiOutlineInboxIn
@@ -33,9 +31,14 @@ const emptyQuickForm = {
 const categories = ['Dairy', 'Beverages', 'Snacks', 'Grocery', 'Personal Care', 'Household', 'Other'];
 const gstSlabs = [0, 5, 12, 18, 28];
 
+// FEATURE TOGGLE: Set to false to easily disable/remove the voice typing microphone button
+const ENABLE_VOICE_TYPING = true;
+
 const Billing = () => {
   const [barcode, setBarcode] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef(null);
   
   // Persistent Cart & Customer state
   const [cart, setCart] = useState(() => {
@@ -44,7 +47,6 @@ const Billing = () => {
   });
   const [receipt, setReceipt] = useState(null);
   const [checkingOut, setCheckingOut] = useState(false);
-  const [cameraActive, setCameraActive] = useState(false);
   
   // Quick Add Modal States
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -115,7 +117,6 @@ const Billing = () => {
 
   const barcodeRef = useRef(null);
   const searchInputRef = useRef(null);
-  const qrCodeInstanceRef = useRef(null);
   const searchTimeoutRef = useRef(null);
 
   // Math Calculations (CGST & SGST Split)
@@ -143,6 +144,70 @@ const Billing = () => {
       setReceivedAmount('');
     }
   }, [grandTotal]);
+
+  // Cleanup speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, []);
+
+  const toggleVoiceTyping = () => {
+    if (isListening) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast.error("Voice typing is not supported on this browser.");
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
+      
+      recognition.lang = 'en-IN'; 
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        toast('Speak customer name now...', { icon: '🎙️' });
+      };
+
+      recognition.onresult = (event) => {
+        const resultText = event.results[0][0].transcript;
+        const cleanName = resultText.replace(/\.$/, '');
+        setCustomerName(cleanName);
+        toast.success(`Recognized: "${cleanName}"`);
+      };
+
+      recognition.onerror = (event) => {
+        console.error("Speech recognition error:", event.error);
+        if (event.error !== 'aborted') {
+          toast.error(`Voice typing error: ${event.error}`);
+        }
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.start();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to start microphone.");
+      setIsListening(false);
+    }
+  };
 
   useEffect(() => {
     // Attempt focus at multiple stages of the page transition to guarantee cursor activation
@@ -473,59 +538,7 @@ const Billing = () => {
     }
   };
 
-  const startCamera = async () => {
-    try {
-      const html5QrCode = new Html5Qrcode("reader");
-      qrCodeInstanceRef.current = html5QrCode;
 
-      await html5QrCode.start(
-        { facingMode: "environment" },
-        {
-          fps: 20,
-          qrbox: { width: 260, height: 160 },
-          formatsToSupport: [
-            Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.EAN_8,
-            Html5QrcodeSupportedFormats.UPC_A,
-            Html5QrcodeSupportedFormats.UPC_E,
-            Html5QrcodeSupportedFormats.CODE_128
-          ]
-        },
-        (decodedText) => {
-          if (navigator.vibrate) navigator.vibrate(100);
-          handleBarcodeSubmit(decodedText);
-          stopCamera();
-        },
-        (errorMessage) => {}
-      );
-      setCameraActive(true);
-    } catch (err) {
-      toast.error("Failed to start laptop webcam.");
-      console.error(err);
-      setCameraActive(false);
-    }
-  };
-
-  const stopCamera = async () => {
-    if (qrCodeInstanceRef.current && qrCodeInstanceRef.current.isScanning) {
-      try {
-        await qrCodeInstanceRef.current.stop();
-        qrCodeInstanceRef.current = null;
-      } catch (err) {
-        console.error("Failed to stop scanner", err);
-      }
-    }
-    setCameraActive(false);
-    focusBarcode();
-  };
-
-  const toggleCamera = () => {
-    if (cameraActive) {
-      stopCamera();
-    } else {
-      startCamera();
-    }
-  };
 
   const updateQuantity = (index, delta) => {
     const updated = [...cart];
@@ -642,17 +655,6 @@ const Billing = () => {
                   />
                 </div>
               </div>
-
-              {/* Camera Icon Trigger */}
-              <button 
-                type="button" 
-                onClick={toggleCamera} 
-                className={`btn ${cameraActive ? 'btn--danger' : 'btn--ghost'}`}
-                style={{ padding: '14px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--slate-200)' }}
-                title="Use Laptop Web Cam"
-              >
-                {cameraActive ? <HiOutlineX size={20} /> : <HiOutlineCamera size={20} />}
-              </button>
             </div>
 
             {/* Dropdown Auto-Complete Suggestions List */}
@@ -686,26 +688,6 @@ const Billing = () => {
               </div>
             )}
 
-            {/* Camera View Box */}
-            <div 
-              className="card animate-fade-in" 
-              style={{ 
-                padding: cameraActive ? 16 : 0, 
-                marginTop: cameraActive ? 12 : 0,
-                height: cameraActive ? 'auto' : 0,
-                opacity: cameraActive ? 1 : 0,
-                overflow: 'hidden',
-                transition: 'all 0.3s ease-in-out'
-              }}
-            >
-              {cameraActive && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <span className="font-semibold text-sm">Align barcode inside scanning box</span>
-                  <button onClick={stopCamera} className="clear-link" style={{ fontSize: 13 }}>Close Camera</button>
-                </div>
-              )}
-              <div id="reader" style={{ width: '100%', overflow: 'hidden', borderRadius: '8px', background: '#000' }}></div>
-            </div>
           </div>
 
           {/* Billing Cart Table */}
@@ -847,21 +829,51 @@ const Billing = () => {
                 )}
               </div>
 
-              <input
-                type="text"
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="Customer Name"
-                style={{ 
-                  width: '100%', 
-                  padding: '8px 12px', 
-                  border: '1px solid #e2e8f0', 
-                  borderRadius: 6, 
-                  fontSize: 13, 
-                  outline: 'none'
-                }}
-                autoComplete="off"
-              />
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="Customer Name"
+                  style={{ 
+                    flex: 1, 
+                    padding: '8px 12px', 
+                    border: '1px solid #e2e8f0', 
+                    borderRadius: 6, 
+                    fontSize: 13, 
+                    outline: 'none'
+                  }}
+                  autoComplete="off"
+                />
+                {ENABLE_VOICE_TYPING && (
+                  <button
+                    type="button"
+                    onClick={toggleVoiceTyping}
+                    className={`btn ${isListening ? 'btn--danger' : 'btn--ghost'}`}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: '1px solid var(--slate-200)',
+                      background: isListening ? '#fef2f2' : 'white',
+                      borderColor: isListening ? '#fca5a5' : 'var(--slate-200)',
+                      cursor: 'pointer',
+                      height: '35px'
+                    }}
+                    title={isListening ? "Stop listening" : "Type customer name with voice"}
+                  >
+                    {isListening ? (
+                      <span style={{ color: '#ef4444', display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700 }}>
+                        🛑 <span style={{ textTransform: 'uppercase' }}>Stop</span>
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 13 }}>🎙️</span>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -937,24 +949,6 @@ const Billing = () => {
             </button>
           </div>
 
-          {/* Keyboard Shortcuts Legend card */}
-          <div className="card" style={{ padding: 10, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-            <h4 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--slate-600)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-              ⌨️ Keyboard Shortcuts
-            </h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr', rowGap: 4, fontSize: 10, color: 'var(--slate-500)' }}>
-              <kbd style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 3, padding: '1px 3px', textAlign: 'center', fontWeight: 'bold' }}>F2</kbd>
-              <span>New Bill</span>
-              <kbd style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 3, padding: '1px 3px', textAlign: 'center', fontWeight: 'bold' }}>F3</kbd>
-              <span>Hold Bill</span>
-              <kbd style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 3, padding: '1px 3px', textAlign: 'center', fontWeight: 'bold' }}>F4</kbd>
-              <span>Resume Held Bill</span>
-              <kbd style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 3, padding: '1px 3px', textAlign: 'center', fontWeight: 'bold' }}>F5</kbd>
-              <span>Print & Save</span>
-              <kbd style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 3, padding: '1px 3px', textAlign: 'center', fontWeight: 'bold' }}>Esc</kbd>
-              <span>Close Modals</span>
-            </div>
-          </div>
 
         </div>
       </div>

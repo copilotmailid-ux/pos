@@ -32,7 +32,7 @@ const categories = ['Dairy', 'Beverages', 'Snacks', 'Grocery', 'Personal Care', 
 const gstSlabs = [0, 5, 12, 18, 28];
 
 // FEATURE TOGGLE: Set to false to easily disable/remove the voice typing microphone button
-const ENABLE_VOICE_TYPING = true;
+const ENABLE_VOICE_TYPING = typeof navigator !== 'undefined' && !navigator.userAgent.toLowerCase().includes('electron');
 
 const Billing = () => {
   const [barcode, setBarcode] = useState('');
@@ -73,11 +73,19 @@ const Billing = () => {
     return localStorage.getItem('pos_active_received_amount') || '';
   });
   const [changeDue, setChangeDue] = useState(0);
+  
+  const [settings, setSettings] = useState(null);
+  const [promptProduct, setPromptProduct] = useState(null);
+  const [promptQty, setPromptQty] = useState('1');
+  const qtyInputRef = useRef(null);
 
   // Held Bills System States
   const [heldBills, setHeldBills] = useState([]);
   const [heldListOpen, setHeldListOpen] = useState(false);
   const [customerSuggestions, setCustomerSuggestions] = useState([]);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const customerSuggestionsRef = useRef(null);
+  const skipNextSuggestionFetch = useRef(false);
 
   // Write changes back to localStorage automatically
   useEffect(() => {
@@ -88,11 +96,18 @@ const Billing = () => {
   useEffect(() => {
     localStorage.setItem('pos_active_customer_mobile', customerMobile);
     
+    // Skip fetch if a suggestion was just selected
+    if (skipNextSuggestionFetch.current) {
+      skipNextSuggestionFetch.current = false;
+      return;
+    }
+    
     if (customerMobile.length >= 3) {
       const searchCustomers = async () => {
         try {
           const { data } = await api.get(`/customers?search=${customerMobile}`);
-          setCustomerSuggestions(data.slice(0, 5)); // Limit to top 5 matches
+          setCustomerSuggestions(data.slice(0, 5));
+          setActiveSuggestionIndex(-1);
         } catch (err) {
           console.error("Failed to query customer suggestions", err);
         }
@@ -100,6 +115,7 @@ const Billing = () => {
       searchCustomers();
     } else {
       setCustomerSuggestions([]);
+      setActiveSuggestionIndex(-1);
     }
   }, [customerMobile]);
 
@@ -122,28 +138,35 @@ const Billing = () => {
   // Math Calculations (CGST & SGST Split)
   const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const gstAmount = cart.reduce((sum, item) => sum + (item.price * item.quantity * (item.gstRate / 100)), 0);
-  const cgstAmount = gstAmount / 2; // 50% split for CGST
-  const sgstAmount = gstAmount / 2; // 50% split for SGST
+  const cgstAmount = Math.round((gstAmount / 2 + Number.EPSILON) * 100) / 100;
+  const sgstAmount = Math.round((gstAmount - cgstAmount + Number.EPSILON) * 100) / 100;
   const grandTotal = subtotal + gstAmount;
 
   // Auto-update received amount and change due
   useEffect(() => {
-    if (!receivedAmount) {
-      setChangeDue(0);
-      return;
-    }
-    const due = Number(receivedAmount) - grandTotal;
-    setChangeDue(due > 0 ? due : 0);
-  }, [receivedAmount, grandTotal]);
-
-  // Pre-fill received amount when grandTotal changes
-  useEffect(() => {
-    if (grandTotal > 0) {
+    if (paymentMethod === 'UPI / Card' || paymentMethod === 'Digital Wallet') {
       setReceivedAmount(grandTotal.toFixed(2));
+      setChangeDue(0);
     } else {
-      setReceivedAmount('');
+      if (!receivedAmount) {
+        setChangeDue(0);
+        return;
+      }
+      const due = Number(receivedAmount) - grandTotal;
+      setChangeDue(due > 0 ? due : 0);
     }
-  }, [grandTotal]);
+  }, [receivedAmount, grandTotal, paymentMethod]);
+
+  // Pre-fill received amount when grandTotal changes (only for Cash; Card auto-syncs above)
+  useEffect(() => {
+    if (paymentMethod === 'Cash Tendered') {
+      if (grandTotal > 0) {
+        setReceivedAmount(grandTotal.toFixed(2));
+      } else {
+        setReceivedAmount('');
+      }
+    }
+  }, [grandTotal, paymentMethod]);
 
   // Cleanup speech recognition on unmount
   useEffect(() => {
@@ -227,6 +250,10 @@ const Billing = () => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
         setSearchResults([]);
       }
+      if (customerSuggestionsRef.current && !customerSuggestionsRef.current.contains(event.target)) {
+        setCustomerSuggestions([]);
+        setActiveSuggestionIndex(-1);
+      }
     };
     
     // Scanner focus auto-recovery interceptor
@@ -258,12 +285,39 @@ const Billing = () => {
     };
   }, []);
 
+  useEffect(() => {
+    api.get('/settings')
+      .then(({ data }) => setSettings(data))
+      .catch((err) => console.error('Error fetching settings in POS:', err));
+  }, []);
+
   const focusBarcode = () => { setTimeout(() => barcodeRef.current?.focus(), 100); };
   
   const selectCustomerSuggestion = (cust) => {
+    skipNextSuggestionFetch.current = true;
     setCustomerMobile(cust.mobile);
     setCustomerName(cust.name);
     setCustomerSuggestions([]);
+    setActiveSuggestionIndex(-1);
+  };
+
+  const handleCustomerMobileKeyDown = (e) => {
+    if (customerSuggestions.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveSuggestionIndex(prev => prev < customerSuggestions.length - 1 ? prev + 1 : 0);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveSuggestionIndex(prev => prev > 0 ? prev - 1 : customerSuggestions.length - 1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeSuggestionIndex >= 0 && activeSuggestionIndex < customerSuggestions.length) {
+        selectCustomerSuggestion(customerSuggestions[activeSuggestionIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      setCustomerSuggestions([]);
+      setActiveSuggestionIndex(-1);
+    }
   };
 
   const clearActiveBill = () => {
@@ -348,32 +402,41 @@ const Billing = () => {
 
   // Resuming bill focus handler is managed by hooks below
 
-  const addProductToCart = (product) => {
-    const existingIndex = cart.findIndex((item) => item.productId === product._id);
+  const addProductToCart = (product, qty = 1) => {
+    const cleanQty = parseInt(qty, 10);
+    if (isNaN(cleanQty) || cleanQty <= 0) {
+      toast.error('Please enter a valid quantity.');
+      return;
+    }
+    
+    if (product.stock < cleanQty) {
+      toast.error(`Only ${product.stock} units available in stock!`);
+      return;
+    }
+
+    const cleanCode = product.barcode;
+    const existingIndex = cart.findIndex((item) => item.barcode === cleanCode);
     const itemGst = product.gstRate ?? 12;
+    
     if (existingIndex !== -1) {
       const updated = [...cart];
-      updated[existingIndex].quantity += 1;
+      updated[existingIndex].quantity += cleanQty;
       updated[existingIndex].total = updated[existingIndex].quantity * updated[existingIndex].price * (1 + (itemGst / 100));
       setCart(updated);
-      toast.success(`${product.name} qty +1`);
+      toast.success(`${product.name} qty +${cleanQty}`);
     } else {
-      if (product.stock < 1) {
-        toast.error(`${product.name} is out of stock!`);
-        return;
-      }
-      setCart([...cart, {
-        productId: product._id,
-        productName: product.name,
+      setCart(prevCart => [...prevCart, {
+        productId: product.id || product._id, 
+        productName: product.name, 
         variant: product.variant || '',
         barcode: product.barcode,
-        price: product.sellingPrice,
-        quantity: 1,
+        price: product.sellingPrice, 
+        quantity: cleanQty, 
         gstRate: itemGst,
-        total: product.sellingPrice * (1 + (itemGst / 100)),
+        total: product.sellingPrice * cleanQty * (1 + (itemGst / 100)), 
         maxStock: product.stock,
       }]);
-      toast.success(`${product.name} ${product.variant ? `(${product.variant})` : ''} added`);
+      toast.success(`${product.name} added`);
     }
     setBarcode('');
     setSearchQuery('');
@@ -387,7 +450,7 @@ const Billing = () => {
     if (!cleanCode) return;
 
     const existingIndex = cart.findIndex((item) => item.barcode === cleanCode);
-    if (existingIndex !== -1) {
+    if (existingIndex !== -1 && settings?.barcodeAction !== 'prompt') {
       const updated = [...cart];
       updated[existingIndex].quantity += 1;
       const itemGst = updated[existingIndex].gstRate ?? 12;
@@ -407,28 +470,23 @@ const Billing = () => {
         focusBarcode();
         return;
       }
-      const itemGst = data.gstRate ?? 12;
-      setCart(prevCart => [...prevCart, {
-        productId: data._id, 
-        productName: data.name, 
-        variant: data.variant || '',
-        barcode: data.barcode,
-        price: data.sellingPrice, 
-        quantity: 1, 
-        gstRate: itemGst,
-        total: data.sellingPrice * (1 + (itemGst / 100)), 
-        maxStock: data.stock,
-      }]);
-      setBarcode('');
-      setSearchResults([]);
-      toast.success(`${data.name} ${data.variant ? `(${data.variant})` : ''} added`);
+      
+      if (settings?.barcodeAction === 'prompt') {
+        setPromptProduct(data);
+        setPromptQty('1');
+        setBarcode('');
+        setTimeout(() => qtyInputRef.current?.focus(), 150);
+      } else {
+        addProductToCart(data, 1);
+      }
     } catch (err) {
       setQuickBarcode(cleanCode);
       setQuickForm({ ...emptyQuickForm });
       setQuickAddOpen(true);
       toast('New barcode detected! Add product details.', { icon: '✨' });
+      setBarcode('');
+      focusBarcode();
     }
-    focusBarcode();
   };
 
   const handleBarcodeChange = (e) => {
@@ -576,6 +634,11 @@ const Billing = () => {
       setReceipt(data);
       clearActiveBill();
       toast.success(`Sale ${data.invoiceNo} completed!`);
+      
+      // Auto-print receipt if configured in settings
+      if (settings?.autoPrint) {
+        setTimeout(() => window.print(), 500);
+      }
     } catch (err) { toast.error(err.response?.data?.message || 'Checkout failed'); }
     finally { setCheckingOut(false); }
   };
@@ -619,7 +682,7 @@ const Billing = () => {
               
               {/* 1. Barcode Scan Input (Left side) */}
               <div style={{ flex: 1.2 }}>
-                <form onSubmit={handleManualSubmit} style={{ display: 'flex', background: 'white', borderRadius: 10, border: '1px solid var(--slate-200)', overflow: 'hidden' }}>
+                <form onSubmit={handleManualSubmit} className="search-input-group">
                   <input
                     ref={barcodeRef}
                     id="barcode-input"
@@ -628,12 +691,10 @@ const Billing = () => {
                     onChange={handleBarcodeChange}
                     onKeyDown={handleBarcodeKeyDown}
                     placeholder="Scan Barcode..."
-                    className="barcode-input"
-                    style={{ border: 'none', padding: '14px 16px', outline: 'none', flex: 1, fontSize: 14 }}
                     autoComplete="off"
                     autoFocus
                   />
-                  <div style={{ background: '#f1f5f9', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: 12, fontWeight: 600, color: 'var(--slate-400)', borderLeft: '1px solid #e2e8f0' }}>
+                  <div className="input-label">
                     Barcode
                   </div>
                 </form>
@@ -641,8 +702,8 @@ const Billing = () => {
 
               {/* 2. Text Search Input (Right side) */}
               <div style={{ flex: 1.5, position: 'relative' }}>
-                <div style={{ display: 'flex', background: 'white', borderRadius: 10, border: '1px solid var(--slate-200)', overflow: 'hidden', alignItems: 'center', paddingLeft: 14 }}>
-                  <HiOutlineSearch style={{ color: 'var(--slate-400)', fontSize: 18 }} />
+                <div className="search-input-group">
+                  <HiOutlineSearch className="search-icon" size={18} />
                   <input
                     ref={searchInputRef}
                     type="text"
@@ -650,8 +711,8 @@ const Billing = () => {
                     onChange={handleSearchQueryChange}
                     onKeyDown={handleSearchKeyDown}
                     placeholder="Search product by name..."
-                    style={{ border: 'none', padding: '14px 12px', outline: 'none', flex: 1, fontSize: 14 }}
                     autoComplete="off"
+                    style={{ paddingLeft: 10 }}
                   />
                 </div>
               </div>
@@ -693,7 +754,7 @@ const Billing = () => {
           {/* Billing Cart Table */}
           <div className="card" style={{ padding: 0 }}>
             <div className="table-wrapper">
-              <table className="data-table">
+              <table className="data-table data-table--bordered">
                 <thead>
                   <tr>
                     <th>ITEM DESCRIPTION</th>
@@ -732,7 +793,7 @@ const Billing = () => {
                         <td className="text-right" style={{ fontSize: 14, color: 'var(--slate-700)' }}>
                           ₹{item.price.toFixed(2)}
                         </td>
-                        <td>
+                        <td className="text-center">
                           <div className="qty-controls" style={{ margin: '0 auto' }}>
                             <button onClick={() => updateQuantity(idx, -1)} className="qty-btn"><HiOutlineMinus /></button>
                             <span className="qty-value">{item.quantity}</span>
@@ -759,196 +820,247 @@ const Billing = () => {
           </div>
         </div>
 
-        {/* Right Side: Sidebar Cards (Customer, Totals, Payment Collection) */}
+        {/* Right Side: Sidebar Panel (Cashier Cockpit) */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           
-          {/* 1. Customer Details Card */}
-          <div className="card" style={{ padding: 12, border: '1px solid #e2e8f0' }}>
-            <h3 style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--slate-800)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-              Customer Details
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, position: 'relative' }}>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type="text"
-                  maxLength="10"
-                  value={customerMobile}
-                  onChange={(e) => setCustomerMobile(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Mobile (10 digits)"
-                  style={{ 
-                    width: '100%', 
-                    padding: '8px 12px', 
-                    border: '1px solid #2563eb', // Blue border matching mockup
-                    borderRadius: 6, 
-                    fontSize: 13, 
-                    outline: 'none'
-                  }}
-                  autoComplete="off"
-                />
-                
-                {/* Autocomplete Dropdown List */}
-                {customerSuggestions.length > 0 && (
-                  <div 
-                    style={{ 
-                      position: 'absolute', 
-                      top: '100%', 
-                      left: 0, 
-                      right: 0, 
-                      background: 'white', 
-                      border: '1px solid #cbd5e1', 
-                      borderRadius: '8px', 
-                      boxShadow: 'var(--shadow-lg)', 
-                      zIndex: 100, 
-                      maxHeight: '160px', 
-                      overflowY: 'auto',
-                      overscrollBehavior: 'contain',
-                      marginTop: '4px'
-                    }}
-                  >
-                    {customerSuggestions.map((c) => (
-                      <div
-                        key={c._id}
-                        onClick={() => selectCustomerSuggestion(c)}
-                        style={{ 
-                          padding: '8px 12px', 
-                          borderBottom: '1px solid #f1f5f9', 
-                          cursor: 'pointer',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center'
-                        }}
-                        className="search-result-item"
-                      >
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-800)' }}>{c.name}</span>
-                        <span style={{ fontSize: 10.5, color: 'var(--slate-500)', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px' }}>
-                          {c.mobile}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <input
-                  type="text"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="Customer Name"
-                  style={{ 
-                    flex: 1, 
-                    padding: '8px 12px', 
-                    border: '1px solid #e2e8f0', 
-                    borderRadius: 6, 
-                    fontSize: 13, 
-                    outline: 'none'
-                  }}
-                  autoComplete="off"
-                />
-                {ENABLE_VOICE_TYPING && (
-                  <button
-                    type="button"
-                    onClick={toggleVoiceTyping}
-                    className={`btn ${isListening ? 'btn--danger' : 'btn--ghost'}`}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      border: '1px solid var(--slate-200)',
-                      background: isListening ? '#fef2f2' : 'white',
-                      borderColor: isListening ? '#fca5a5' : 'var(--slate-200)',
-                      cursor: 'pointer',
-                      height: '35px'
-                    }}
-                    title={isListening ? "Stop listening" : "Type customer name with voice"}
-                  >
-                    {isListening ? (
-                      <span style={{ color: '#ef4444', display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700 }}>
-                        🛑 <span style={{ textTransform: 'uppercase' }}>Stop</span>
-                      </span>
-                    ) : (
-                      <span style={{ fontSize: 13 }}>🎙️</span>
-                    )}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* 2. Totals Summary Card with CGST and SGST Splits */}
-          <div className="card" style={{ padding: 12, border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--slate-500)' }}>
-              <span>Subtotal</span>
-              <span className="font-semibold" style={{ color: 'var(--slate-800)' }}>₹{subtotal.toFixed(2)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--slate-500)' }}>
-              <span>CGST</span>
-              <span className="font-semibold" style={{ color: 'var(--slate-800)' }}>₹{cgstAmount.toFixed(2)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--slate-500)' }}>
-              <span>SGST</span>
-              <span className="font-semibold" style={{ color: 'var(--slate-800)' }}>₹{sgstAmount.toFixed(2)}</span>
-            </div>
-            <hr style={{ border: 'none', borderTop: '1px solid #f1f5f9', margin: '2px 0' }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--slate-800)' }}>Grand Total</span>
-              <span style={{ fontSize: 18, fontWeight: 800, color: '#2563eb' }}>₹{grandTotal.toFixed(2)}</span>
-            </div>
-          </div>
-
-          {/* 3. Payment Collection Card */}
-          <div className="card" style={{ padding: 12, border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <h3 style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--slate-800)' }}>Payment Collection</h3>
+          <div className="card" style={{ padding: 16, border: '1px solid var(--slate-200)', display: 'flex', flexDirection: 'column', gap: 16 }}>
             
+            {/* Section 1: Customer Details */}
             <div>
-              <label style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--slate-500)', display: 'block', marginBottom: 2 }}>Select Method</label>
-              <select
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value)}
-                style={{ width: '100%', padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: 6, fontSize: 13, outline: 'none', background: 'white' }}
+              <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--slate-800)', marginBottom: 8 }}>
+                👤 Customer Details
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, position: 'relative' }}>
+                <div style={{ position: 'relative' }} ref={customerSuggestionsRef}>
+                  <input
+                    type="text"
+                    maxLength="10"
+                    value={customerMobile}
+                    onChange={(e) => setCustomerMobile(e.target.value.replace(/\D/g, ''))}
+                    onKeyDown={handleCustomerMobileKeyDown}
+                    placeholder="Mobile (10 digits)"
+                    className="form-input"
+                    style={{ padding: '8px 12px', fontSize: 13 }}
+                    autoComplete="off"
+                  />
+                  
+                  {/* Autocomplete Dropdown List */}
+                  {customerSuggestions.length > 0 && (
+                    <div 
+                      style={{ 
+                        position: 'absolute', 
+                        top: '100%', 
+                        left: 0, 
+                        right: 0, 
+                        background: 'white', 
+                        border: '1px solid #cbd5e1', 
+                        borderRadius: '8px', 
+                        boxShadow: 'var(--shadow-lg)', 
+                        zIndex: 100, 
+                        maxHeight: '200px', 
+                        overflowY: 'auto',
+                        overscrollBehavior: 'contain',
+                        marginTop: '4px'
+                      }}
+                    >
+                      {customerSuggestions.map((c, idx) => (
+                        <div
+                          key={c._id}
+                          onMouseDown={(e) => { e.preventDefault(); selectCustomerSuggestion(c); }}
+                          onMouseEnter={() => setActiveSuggestionIndex(idx)}
+                          style={{ 
+                            padding: '10px 14px', 
+                            borderBottom: '1px solid #f1f5f9', 
+                            cursor: 'pointer',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            background: activeSuggestionIndex === idx ? 'var(--brand-50, #ede9fe)' : 'transparent',
+                            transition: 'background 0.1s ease'
+                          }}
+                        >
+                          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--slate-800)' }}>{c.name}</span>
+                          <span style={{ fontSize: 11, color: 'var(--slate-500)', background: '#f1f5f9', padding: '3px 8px', borderRadius: '4px', fontFamily: 'monospace' }}>
+                            {c.mobile}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    placeholder="Customer Name"
+                    className="form-input"
+                    style={{ 
+                      flex: 1, 
+                      padding: '8px 12px', 
+                      fontSize: 13
+                    }}
+                    autoComplete="off"
+                  />
+                  {ENABLE_VOICE_TYPING && (
+                    <button
+                      type="button"
+                      onClick={toggleVoiceTyping}
+                      className={`btn ${isListening ? 'btn--danger' : 'btn--ghost'}`}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid var(--slate-200)',
+                        background: isListening ? '#fef2f2' : 'white',
+                        borderColor: isListening ? '#fca5a5' : 'var(--slate-200)',
+                        cursor: 'pointer',
+                        height: '35px'
+                      }}
+                      title={isListening ? "Stop listening" : "Type customer name with voice"}
+                    >
+                      {isListening ? (
+                        <span style={{ color: '#ef4444', display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700 }}>
+                          🛑 <span style={{ textTransform: 'uppercase' }}>Stop</span>
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 13 }}>🎙️</span>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <hr style={{ border: 'none', borderTop: '1px solid var(--slate-100)', margin: '4px 0' }} />
+
+            {/* Section 2: Invoice Summary */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--slate-500)' }}>
+                <span>Subtotal</span>
+                <span className="font-semibold" style={{ color: 'var(--slate-800)' }}>₹{subtotal.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--slate-500)' }}>
+                <span>CGST (Central Tax)</span>
+                <span className="font-semibold" style={{ color: 'var(--slate-800)' }}>₹{cgstAmount.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--slate-500)' }}>
+                <span>SGST (State Tax)</span>
+                <span className="font-semibold" style={{ color: 'var(--slate-800)' }}>₹{sgstAmount.toFixed(2)}</span>
+              </div>
+              
+              {/* Massive Grand Total Block */}
+              <div style={{ 
+                background: 'var(--slate-800)', 
+                borderRadius: '8px', 
+                padding: '12px 14px', 
+                color: 'white', 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                marginTop: 6,
+                boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)'
+              }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--slate-300)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Grand Total</span>
+                <span style={{ fontSize: 22, fontWeight: 800, color: '#10b981' }}>₹{grandTotal.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <hr style={{ border: 'none', borderTop: '1px solid var(--slate-100)', margin: '4px 0' }} />
+
+            {/* Section 3: Payment & Checkout */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--slate-500)', display: 'block', marginBottom: 6 }}>Payment Method</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {['Cash Tendered', 'UPI / Card'].map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      onClick={() => setPaymentMethod(method)}
+                      style={{
+                        flex: 1,
+                        padding: '10px 8px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        borderRadius: '6px',
+                        border: '1px solid',
+                        borderColor: paymentMethod === method ? 'var(--brand-500)' : 'var(--slate-200)',
+                        background: paymentMethod === method ? 'var(--brand-50)' : 'white',
+                        color: paymentMethod === method ? 'var(--brand-700)' : 'var(--slate-600)',
+                        cursor: 'pointer',
+                        transition: 'var(--transition-fast)'
+                      }}
+                    >
+                      {method === 'Cash Tendered' ? '💵 Cash' : '💳 UPI / Card'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {paymentMethod === 'Cash Tendered' ? (
+                <div className="animate-fade-in">
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--slate-500)', display: 'block', marginBottom: 4 }}>Received Cash Amount (₹)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={receivedAmount}
+                    onChange={(e) => setReceivedAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="form-input"
+                    style={{ width: '100%', padding: '8px 12px', fontSize: 13 }}
+                  />
+                  
+                  {/* Change Due Box */}
+                  <div style={{ 
+                    background: '#f0fdf4', 
+                    border: '1px solid #bbf7d0', 
+                    padding: '8px 12px', 
+                    borderRadius: 6, 
+                    textAlign: 'center', 
+                    marginTop: 10 
+                  }}>
+                    <p style={{ fontSize: 9.5, fontWeight: 700, color: '#16a34a', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Change Due Balance
+                    </p>
+                    <p style={{ fontSize: 20, fontWeight: 800, color: '#16a34a', marginTop: 2 }}>
+                      ₹{changeDue.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ background: 'var(--slate-50)', padding: '10px 12px', borderRadius: 6, fontSize: 12, color: 'var(--slate-500)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>UPI/Card Auto-settled</span>
+                  <span className="font-semibold" style={{ color: 'var(--slate-850)' }}>₹{grandTotal.toFixed(2)}</span>
+                </div>
+              )}
+
+              <button 
+                id="checkout-btn" 
+                onClick={handleCheckout} 
+                disabled={cart.length === 0 || checkingOut} 
+                className="btn btn--primary"
+                style={{ 
+                  padding: '12px 14px', 
+                  borderRadius: 8, 
+                  fontSize: 14, 
+                  fontWeight: 700, 
+                  width: '100%', 
+                  marginTop: 6,
+                  background: cart.length === 0 ? 'var(--slate-100)' : 'linear-gradient(135deg, var(--emerald-600), var(--emerald-500))',
+                  boxShadow: cart.length === 0 ? 'none' : '0 4px 14px rgba(16, 185, 129, 0.25)',
+                  cursor: cart.length === 0 ? 'not-allowed' : 'pointer'
+                }}
               >
-                <option value="Cash Tendered">Cash Tendered</option>
-                <option value="UPI / Card">UPI / Card</option>
-                <option value="Digital Wallet">Digital Wallet</option>
-              </select>
+                {checkingOut ? (<><div className="spinner-sm"></div> Processing...</>) : '✓ Checkout & Print (F5)'}
+              </button>
             </div>
 
-            <div>
-              <label style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--slate-500)', display: 'block', marginBottom: 2 }}>Received Amount (₹)</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={receivedAmount}
-                onChange={(e) => setReceivedAmount(e.target.value)}
-                placeholder="0.00"
-                style={{ width: '100%', padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: 6, fontSize: 13, outline: 'none' }}
-              />
-            </div>
-
-            {/* Change Due Box */}
-            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '8px 12px', borderRadius: 6, textAlign: 'center', marginTop: 2 }}>
-              <p style={{ fontSize: 9.5, fontWeight: 700, color: '#16a34a', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Change Due Balance
-              </p>
-              <p style={{ fontSize: 18, fontWeight: 800, color: '#16a34a', marginTop: 2 }}>
-                ₹{changeDue.toFixed(2)}
-              </p>
-            </div>
-
-            <button 
-              id="checkout-btn" 
-              onClick={handleCheckout} 
-              disabled={cart.length === 0 || checkingOut} 
-              className="checkout-btn"
-              style={{ padding: '10px 14px', borderRadius: 8, fontSize: 14, fontWeight: 700, width: '100%', marginTop: 4 }}
-            >
-              {checkingOut ? (<><div className="spinner-sm"></div> Processing...</>) : '✓ Checkout & Print (F5)'}
-            </button>
           </div>
-
 
         </div>
       </div>
@@ -1106,6 +1218,59 @@ const Billing = () => {
                 <button type="button" onClick={() => setQuickAddOpen(false)} className="btn btn--ghost">Cancel</button>
                 <button type="submit" disabled={quickSaving} className="btn btn--primary">
                   {quickSaving ? 'Saving...' : 'Register & Add to Bill'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {promptProduct && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal-backdrop" onClick={() => { setPromptProduct(null); focusBarcode(); }} />
+          <div className="modal modal--sm animate-fade-in" style={{ padding: 24 }}>
+            <h3 style={{ marginBottom: 12 }}>Enter Quantity</h3>
+            <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16 }}>
+              {promptProduct.name} {promptProduct.variant && `(${promptProduct.variant})`} (Stock: {promptProduct.stock})
+            </p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                addProductToCart(promptProduct, promptQty);
+                setPromptProduct(null);
+              }}
+            >
+              <div className="form-group" style={{ marginBottom: 20 }}>
+                <input
+                  type="number"
+                  ref={qtyInputRef}
+                  className="form-input"
+                  min="1"
+                  max={promptProduct.stock}
+                  value={promptQty}
+                  onChange={(e) => setPromptQty(e.target.value)}
+                  style={{ textAlign: 'center', fontSize: 20, height: 48, fontWeight: 700 }}
+                  required
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button
+                  type="submit"
+                  className="btn btn--primary"
+                  style={{ flex: 1 }}
+                >
+                  Add to Cart
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={() => {
+                    setPromptProduct(null);
+                    focusBarcode();
+                  }}
+                  style={{ flex: 1 }}
+                >
+                  Cancel
                 </button>
               </div>
             </form>

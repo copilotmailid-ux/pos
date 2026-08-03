@@ -1,6 +1,8 @@
 const { app, BrowserWindow, dialog } = require('electron');
+// Disable hardware acceleration to save memory and make launch instant on POS machines
+app.disableHardwareAcceleration();
 const path = require('path');
-const { fork } = require('child_process');
+const { fork, exec } = require('child_process');
 const net = require('net');
 const fs = require('fs');
 
@@ -74,6 +76,80 @@ if (!gotSingleInstanceLock) {
     server.listen(port, host);
   }
 
+  function killProcessOnPort(port) {
+    return new Promise((resolve) => {
+      writeLog(`Checking port ${port} to kill any conflicting processes...`);
+      if (process.platform !== 'win32') {
+        // macOS/Linux
+        exec(`lsof -t -i:${port}`, (err, stdout) => {
+          if (!err && stdout.trim()) {
+            const pid = stdout.trim();
+            writeLog(`[macOS/Linux] Found PID ${pid} on port ${port}. Terminating...`);
+            exec(`kill -9 ${pid}`, (killErr) => {
+              if (killErr) {
+                writeLog(`[macOS/Linux] Failed to kill PID ${pid}: ${killErr.message}`);
+              } else {
+                writeLog(`[macOS/Linux] Successfully killed PID ${pid}`);
+              }
+              resolve(true);
+            });
+          } else {
+            resolve(false);
+          }
+        });
+        return;
+      }
+
+      // Windows
+      exec(`netstat -ano`, (err, stdout) => {
+        if (err || !stdout) {
+          writeLog(`[Windows] netstat -ano failed or returned empty: ${err ? err.message : 'no stdout'}`);
+          return resolve(false);
+        }
+
+        const lines = stdout.replace(/\r/g, '').split('\n');
+        const pidsToKill = new Set();
+
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 5) {
+            const localAddress = parts[1];
+            const pidStr = parts[parts.length - 1];
+            const pid = parseInt(pidStr, 10);
+            if ((localAddress.endsWith(`:${port}`) || localAddress.endsWith(`]:${port}`)) && !isNaN(pid) && pid > 4 && pid !== process.pid) {
+              writeLog(`[Windows] Found PID ${pid} occupying port ${port} (LocalAddress: ${localAddress})`);
+              pidsToKill.add(pid);
+            }
+          }
+        }
+
+        if (pidsToKill.size === 0) {
+          writeLog(`[Windows] No other processes are occupying port ${port}.`);
+          return resolve(false);
+        }
+
+        const killPromises = Array.from(pidsToKill).map((pid) => {
+          return new Promise((res) => {
+            writeLog(`[Windows] Terminating process PID ${pid}...`);
+            exec(`taskkill /F /PID ${pid}`, (killErr, killStdout, killStderr) => {
+              if (killErr) {
+                writeLog(`[Windows] Failed to kill PID ${pid}: ${killErr.message}. Stderr: ${killStderr.trim()}`);
+              } else {
+                writeLog(`[Windows] Successfully killed PID ${pid}. Stdout: ${killStdout.trim()}`);
+              }
+              res();
+            });
+          });
+        });
+
+        Promise.all(killPromises).then(() => {
+          writeLog(`[Windows] Finished attempting to kill all processes on port ${port}.`);
+          resolve(true);
+        });
+      });
+    });
+  }
+
   function startBackendServer() {
     if (isStopping) return;
 
@@ -115,13 +191,51 @@ if (!gotSingleInstanceLock) {
         } else {
           console.error(`CRITICAL: Backend crashed ${backendRestartCount} times. Disabling auto-heal.`);
           dialog.showErrorBox(
-            "Database Connection Error",
-            "The backend server crashed repeatedly. Please ensure MongoDB is running locally on port 27017 and restart the application."
+            "Backend Connection Error",
+            "The backend server crashed repeatedly. Please ensure no other process is occupying port 5000 and restart the application."
           );
           app.quit();
         }
       }
     });
+  }
+
+  function waitForServerAndLoad() {
+    const http = require('http');
+    const pollInterval = setInterval(() => {
+      const req = http.request({
+        method: 'GET',
+        hostname: '127.0.0.1',
+        port: 5000,
+        path: '/api/health',
+        timeout: 200
+      }, (res) => {
+        if (res.statusCode === 200) {
+          clearInterval(pollInterval);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.loadURL('http://127.0.0.1:5000').catch(() => {});
+          }
+        }
+      });
+      
+      req.on('error', () => {
+        // Backend not ready yet, retry on next interval tick
+      });
+      
+      req.on('timeout', () => {
+        req.destroy();
+      });
+      
+      req.end();
+    }, 100);
+
+    // Hard fallback: clear interval and attempt load after 8 seconds anyway
+    setTimeout(() => {
+      clearInterval(pollInterval);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadURL('http://127.0.0.1:5000').catch(() => {});
+      }
+    }, 8000);
   }
 
   function createWindow() {
@@ -137,8 +251,6 @@ if (!gotSingleInstanceLock) {
         contextIsolation: true
       }
     });
-
-    mainWindow.loadURL('http://localhost:5000');
 
     // Renderer Crash Recovery
     mainWindow.webContents.on('render-process-gone', (event, details) => {
@@ -160,36 +272,93 @@ if (!gotSingleInstanceLock) {
     });
   }
 
-  app.on('ready', () => {
-    checkPort(5000, '127.0.0.1', (inUse) => {
-      if (inUse) {
-        console.error('CRITICAL: Port 5000 is occupied. POS startup blocked.');
+  app.on('ready', async () => {
+    writeLog('App ready. Cleaning up port 5000 if occupied...');
+    try {
+      await killProcessOnPort(5000);
+      // Wait a moment for OS to release the port socket fully
+      await new Promise((res) => setTimeout(res, 500));
+    } catch (e) {
+      writeLog(`Error during initial port cleanup: ${e.message}`);
+    }
+
+    // Double check if the port is STILL occupied
+    checkPort(5000, '127.0.0.1', (stillInUse) => {
+      if (stillInUse) {
+        writeLog('CRITICAL: Port 5000 is still occupied after termination attempt. Exiting...');
         dialog.showErrorBox(
           "Port Conflict Error",
-          "Port 5000 is already in use by another program. Please close any other running instances of SuperMart POS and try again."
+          "Port 5000 is already in use by another program and could not be freed. Please close any conflicting applications and try again."
         );
         app.quit();
         return;
       }
       startBackendServer();
-      setTimeout(createWindow, 1500);
+      createWindow(); // Open window immediately
+      waitForServerAndLoad(); // Active poll backend health check and load the URL instantly
     });
   });
 
-  app.on('window-all-closed', () => {
+  function shutdownServer() {
+    return new Promise((resolve) => {
+      const http = require('http');
+      const req = http.request({
+        method: 'POST',
+        hostname: '127.0.0.1',
+        port: 5000,
+        path: '/api/internal/shutdown',
+        timeout: 1000
+      }, (res) => {
+        resolve();
+      });
+      
+      req.on('error', (err) => {
+        console.error('Graceful database shutdown request error:', err.message);
+        resolve();
+      });
+      
+      req.on('timeout', () => {
+        req.destroy();
+        resolve();
+      });
+      
+      req.end();
+    });
+  }
+
+  app.on('window-all-closed', async () => {
     isStopping = true;
     if (serverProcess) {
-      serverProcess.kill('SIGINT');
-    }
-    if (process.platform !== 'darwin') {
-      app.quit();
+      // Trigger the HTTP database shutdown endpoint first for Windows signals safety
+      await shutdownServer();
+
+      // Force terminate fallback if the database takes too long to close
+      const safetyForceKill = setTimeout(() => {
+        if (serverProcess) {
+          serverProcess.kill('SIGKILL');
+        }
+        if (process.platform !== 'darwin') {
+          app.quit();
+        }
+      }, 1500);
+
+      serverProcess.on('exit', () => {
+        clearTimeout(safetyForceKill);
+        if (process.platform !== 'darwin') {
+          app.quit();
+        }
+      });
+    } else {
+      if (process.platform !== 'darwin') {
+        app.quit();
+      }
     }
   });
 
   app.on('will-quit', () => {
     isStopping = true;
     if (serverProcess) {
-      serverProcess.kill('SIGINT');
+      serverProcess.kill('SIGKILL');
     }
   });
 }

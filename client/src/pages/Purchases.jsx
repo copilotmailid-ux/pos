@@ -284,12 +284,7 @@ const Purchases = () => {
     <>
       <div className="animate-fade-in">
         <div className="page-header-row" style={{ marginBottom: 16 }}>
-          <div>
-            <h1 style={{ fontSize: 26, fontWeight: 700, color: 'var(--slate-800)' }}>Purchases</h1>
-            <p style={{ color: 'var(--slate-500)', marginTop: 4, fontSize: 14 }}>
-              Buy new product stock from suppliers and record supply invoices.
-            </p>
-          </div>
+          <h1 style={{ fontSize: 26, fontWeight: 700, color: 'var(--slate-800)' }}>Purchases</h1>
           <div>
             {activeTab === 'history' ? (
               <button onClick={handleOpenNewPurchase} className="btn btn--primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -324,20 +319,23 @@ const Purchases = () => {
         {/* ================= HISTORY TAB ================= */}
         {activeTab === 'history' && (
           <>
-            <div className="search-bar">
-              <span className="search-icon"><HiOutlineSearch /></span>
-              <input
-                id="purchase-search"
-                type="text"
-                value={searchQuery}
-                onChange={handleSearchChange}
-                placeholder="Search past purchases by invoice / purchase number..."
-              />
+            <div style={{ marginBottom: 16 }}>
+              <div className="search-input-group" style={{ maxWidth: 500 }}>
+                <HiOutlineSearch className="search-icon" />
+                <input
+                  id="purchase-search"
+                  type="text"
+                  className="search-input"
+                  value={searchQuery}
+                  onChange={handleSearchChange}
+                  placeholder="Search past purchases by invoice / purchase number..."
+                />
+              </div>
             </div>
 
             <div className="card">
               <div className="table-wrapper">
-                <table className="data-table">
+                <table className="data-table data-table--bordered">
                   <thead>
                     <tr>
                       <th>Purchase Number</th>
@@ -392,10 +390,11 @@ const Purchases = () => {
 
               {/* Product search box */}
               <div style={{ position: 'relative', marginBottom: 20 }}>
-                <div className="search-bar" style={{ margin: 0 }}>
-                  <span className="search-icon"><HiOutlineSearch /></span>
+                <div className="search-input-group">
+                  <HiOutlineSearch className="search-icon" />
                   <input
                     type="text"
+                    className="search-input"
                     value={productSearch}
                     onChange={handleProductSearch}
                     placeholder="Search product by name or barcode to add to supply bill..."
@@ -446,7 +445,7 @@ const Purchases = () => {
 
               {/* Items Table */}
               <div className="table-wrapper">
-                <table className="data-table" style={{ fontSize: 13 }}>
+                <table className="data-table data-table--bordered" style={{ fontSize: 13 }}>
                   <thead>
                     <tr>
                       <th>Product Details</th>
@@ -634,57 +633,45 @@ const Purchases = () => {
               <button onClick={closeTypeSelectModal} className="close-btn"><HiOutlineX /></button>
             </div>
             <div className="modal-body" style={{ padding: '20px 24px' }}>
-              <p style={{ fontSize: 14, color: 'var(--slate-600)', marginBottom: 20 }}>
-                How would you like to record this supply purchase invoice?
-              </p>
-
-              <div style={{ display: 'grid', gap: 16 }}>
-                {/* GST Card Option */}
+              <div style={{ display: 'grid', gap: 14 }}>
+                {/* GST Option */}
                 <div
                   onClick={() => selectPurchaseClassification('GST')}
                   style={{
-                    padding: 18,
-                    borderRadius: 12,
+                    padding: '16px 20px',
+                    borderRadius: 10,
                     border: '2px solid #bbf7d0',
                     background: '#f0fdf4',
                     cursor: 'pointer',
-                    transition: 'all 0.2s ease'
+                    transition: 'all 0.2s ease',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10
                   }}
                   className="hover-card-gst"
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <h4 style={{ fontSize: 15, fontWeight: 700, color: '#16a34a', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <HiOutlineShieldCheck size={20} /> GST Tax Purchase (Supplier A)
-                    </h4>
-                    <span className="badge badge--success">GST Tax Invoice</span>
-                  </div>
-                  <p style={{ fontSize: 13, color: '#15803d', margin: 0 }}>
-                    Items purchased with GST input tax invoices. Stock will be added to <strong>GST Stock</strong> quota (Product's standard GST slab applied).
-                  </p>
+                  <HiOutlineShieldCheck size={22} color="#16a34a" />
+                  <span style={{ fontSize: 16, fontWeight: 700, color: '#16a34a' }}>GST</span>
                 </div>
 
-                {/* Non-GST Card Option */}
+                {/* Non-GST Option */}
                 <div
                   onClick={() => selectPurchaseClassification('Non-GST')}
                   style={{
-                    padding: 18,
-                    borderRadius: 12,
+                    padding: '16px 20px',
+                    borderRadius: 10,
                     border: '2px solid #fef3c7',
                     background: '#fffbeb',
                     cursor: 'pointer',
-                    transition: 'all 0.2s ease'
+                    transition: 'all 0.2s ease',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10
                   }}
                   className="hover-card-nongst"
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <h4 style={{ fontSize: 15, fontWeight: 700, color: '#d97706', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <HiOutlineDocumentText size={20} /> Non-GST Purchase (Supplier B)
-                    </h4>
-                    <span className="badge badge--warning">Non-GST Invoice</span>
-                  </div>
-                  <p style={{ fontSize: 13, color: '#b45309', margin: 0 }}>
-                    Items purchased without GST invoice from local/unregistered suppliers. Stock added to <strong>Non-GST Stock</strong> quota (Default GST rate set to 0%).
-                  </p>
+                  <HiOutlineDocumentText size={22} color="#d97706" />
+                  <span style={{ fontSize: 16, fontWeight: 700, color: '#d97706' }}>Non-GST</span>
                 </div>
               </div>
             </div>

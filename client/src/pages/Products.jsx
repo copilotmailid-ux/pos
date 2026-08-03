@@ -47,32 +47,32 @@ const Products = () => {
 
   // Password Protection States
   const [deleteInputPassword, setDeleteInputPassword] = useState('');
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
-  const [newPasswordInput, setNewPasswordInput] = useState('');
-  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  // Settings tab is now managed globally under Ctrl + Shift + S
 
   const searchTimeoutRef = useRef(null);
+  const barcodeInputRef = useRef(null);
+  const nameInputRef = useRef(null);
 
   useEffect(() => {
     fetchProducts('', 1);
-
-    // Hotkey handler for Ctrl + Shift + P
-    const handleKeyDown = (e) => {
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'p') {
-        e.preventDefault();
-        setSettingsOpen(prev => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      document.body.classList.remove('modal-open');
       if (searchTimeoutRef.current) {
         clearTimeout(searchTimeoutRef.current);
       }
     };
   }, []);
+
+  // Autofocus barcode input when modal opens
+  useEffect(() => {
+    if (modalOpen) {
+      const timer = setTimeout(() => {
+        if (barcodeInputRef.current) {
+          barcodeInputRef.current.focus();
+        }
+      }, 80);
+      return () => clearTimeout(timer);
+    }
+  }, [modalOpen]);
 
   const fetchProducts = async (query = '', pageNum = 1) => {
     try {
@@ -184,29 +184,7 @@ const Products = () => {
     }
   };
 
-  const handleUpdatePassword = (e) => {
-    e.preventDefault();
-    const savedPassword = localStorage.getItem('pos_admin_delete_pass') || 'admin123';
-    if (currentPasswordInput !== savedPassword) {
-      toast.error('Current password is incorrect!');
-      return;
-    }
-    if (!newPasswordInput || newPasswordInput.length < 4) {
-      toast.error('New password must be at least 4 characters long!');
-      return;
-    }
-    if (newPasswordInput !== confirmPasswordInput) {
-      toast.error('New passwords do not match!');
-      return;
-    }
-
-    localStorage.setItem('pos_admin_delete_pass', newPasswordInput);
-    toast.success('Admin password updated successfully!');
-    setSettingsOpen(false);
-    setCurrentPasswordInput('');
-    setNewPasswordInput('');
-    setConfirmPasswordInput('');
-  };
+  // handleUpdatePassword has been moved to global settings page
 
   const getStockClass = (st) => {
     if (st <= 0) return 'badge badge--danger';
@@ -216,15 +194,11 @@ const Products = () => {
 
   return (
     <div className="page-container animate-fade-in">
-      <div className="page-header">
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
-          <h1>Products Catalog & Dual Stock Inventory</h1>
-          <p>Manage product items, price structures, GST tax rates, and GST vs Non-GST stock quotas.</p>
+          <h1 style={{ margin: 0 }}>Products</h1>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={() => setSettingsOpen(true)} className="btn btn--outline" style={{ gap: 6 }}>
-            <HiOutlineCog size={18} /> Admin Settings
-          </button>
           <button onClick={openAdd} className="btn btn--primary">
             <HiOutlinePlus /> Add Product
           </button>
@@ -232,22 +206,21 @@ const Products = () => {
       </div>
 
       <div className="products-layout">
-        <div className="filter-bar card">
-          <div className="search-box">
-            <HiOutlineSearch className="search-icon" />
-            <input
-              type="text"
-              className="search-input"
-              placeholder="Search by product name, barcode, or category..."
-              value={search}
-              onChange={handleSearch}
-            />
-          </div>
+        <div className="search-input-group" style={{ marginBottom: 20 }}>
+          <HiOutlineSearch className="search-icon" />
+          <input
+            type="text"
+            className="search-input"
+            placeholder="Search by product name, barcode, or category..."
+            value={search}
+            onChange={handleSearch}
+            style={{ border: 'none', background: 'transparent', height: '100%', width: '100%', outline: 'none', fontSize: 14 }}
+          />
         </div>
 
         <div className="card">
           <div className="table-wrapper">
-            <table className="data-table">
+            <table className="data-table data-table--bordered">
               <thead>
                 <tr>
                   <th>Product</th>
@@ -255,10 +228,10 @@ const Products = () => {
                   <th>Category</th>
                   <th>Purchase Price</th>
                   <th>Selling Price</th>
-                  <th>GST Rate</th>
-                  <th>GST Stock (A)</th>
-                  <th>Non-GST Stock (B)</th>
-                  <th>Total Stock</th>
+                  <th className="text-center">GST Rate</th>
+                  <th className="text-center">GST Stock (A)</th>
+                  <th className="text-center">Non-GST Stock (B)</th>
+                  <th className="text-center">Total Stock</th>
                   <th className="text-right">Actions</th>
                 </tr>
               </thead>
@@ -278,10 +251,10 @@ const Products = () => {
                       <td><span className="badge badge--brand">{p.category}</span></td>
                       <td style={{ color: 'var(--slate-600)' }}>₹{p.purchasePrice.toFixed(2)}</td>
                       <td className="font-medium">₹{p.sellingPrice.toFixed(2)}</td>
-                      <td style={{ color: 'var(--slate-650)' }}>{p.gstRate ?? 12}%</td>
-                      <td style={{ fontWeight: 600, color: '#16a34a' }}>{p.gstStock || 0}</td>
-                      <td style={{ fontWeight: 600, color: '#d97706' }}>{p.nonGstStock || 0}</td>
-                      <td><span className={getStockClass(p.stock)}>{p.stock}</span></td>
+                      <td className="text-center" style={{ color: 'var(--slate-650)' }}>{p.gstRate ?? 12}%</td>
+                      <td className="text-center" style={{ fontWeight: 600, color: '#16a34a' }}>{p.gstStock || 0}</td>
+                      <td className="text-center" style={{ fontWeight: 600, color: '#d97706' }}>{p.nonGstStock || 0}</td>
+                      <td className="text-center"><span className={getStockClass(p.stock)}>{p.stock}</span></td>
                       <td className="text-right">
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
                           <button onClick={() => openEdit(p)} className="btn--icon" title="Edit">
@@ -325,16 +298,38 @@ const Products = () => {
             </div>
             <form onSubmit={handleSubmit} className="modal-body">
               <div className="form-group">
+                <label>Barcode <span className="hint">(auto-generated if empty)</span></label>
+                <input 
+                  type="text" 
+                  ref={barcodeInputRef} 
+                  className="form-input form-input--mono" 
+                  value={form.barcode} 
+                  onChange={(e) => setForm({ ...form, barcode: e.target.value })} 
+                  placeholder="Scan or type barcode (Focus here to scan)" 
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (nameInputRef.current) {
+                        nameInputRef.current.focus();
+                      }
+                    }
+                  }}
+                />
+              </div>
+              <div className="form-group">
                 <label>Product Name <span className="required">*</span></label>
-                <input type="text" className="form-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g., Dabur Red Paste" />
+                <input 
+                  type="text" 
+                  ref={nameInputRef} 
+                  className="form-input" 
+                  value={form.name} 
+                  onChange={(e) => setForm({ ...form, name: e.target.value })} 
+                  placeholder="e.g., Dabur Red Paste" 
+                />
               </div>
               <div className="form-group">
                 <label>Size / Variant <span className="hint">(e.g., 50g, 10 Rs, 1L)</span></label>
                 <input type="text" className="form-input" value={form.variant} onChange={(e) => setForm({ ...form, variant: e.target.value })} placeholder="e.g., 50g, 10 Rs" />
-              </div>
-              <div className="form-group">
-                <label>Barcode <span className="hint">(auto-generated if empty)</span></label>
-                <input type="text" className="form-input form-input--mono" value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} placeholder="Auto-generated" />
               </div>
               <div className="form-group">
                 <label>Category <span className="required">*</span></label>
@@ -429,58 +424,7 @@ const Products = () => {
         document.body
       )}
 
-      {/* Admin Settings Modal */}
-      {settingsOpen && createPortal(
-        <div className="modal-overlay">
-          <div className="modal-backdrop" onClick={() => setSettingsOpen(false)} />
-          <div className="modal modal--md">
-            <div className="modal-header">
-              <h3>Admin Security Password Settings</h3>
-              <button onClick={() => setSettingsOpen(false)} className="close-btn"><HiOutlineX /></button>
-            </div>
-            <form onSubmit={handleUpdatePassword} className="modal-body">
-              <div className="form-group">
-                <label>Current Admin Password</label>
-                <input
-                  type="password"
-                  className="form-input"
-                  value={currentPasswordInput}
-                  onChange={(e) => setCurrentPasswordInput(e.target.value)}
-                  placeholder="Enter current password (Default: admin123)"
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label>New Admin Password</label>
-                <input
-                  type="password"
-                  className="form-input"
-                  value={newPasswordInput}
-                  onChange={(e) => setNewPasswordInput(e.target.value)}
-                  placeholder="Enter new password"
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label>Confirm New Admin Password</label>
-                <input
-                  type="password"
-                  className="form-input"
-                  value={confirmPasswordInput}
-                  onChange={(e) => setConfirmPasswordInput(e.target.value)}
-                  placeholder="Re-enter new password"
-                  required
-                />
-              </div>
-              <div className="form-actions" style={{ marginTop: 20 }}>
-                <button type="button" onClick={() => setSettingsOpen(false)} className="btn btn--ghost">Cancel</button>
-                <button type="submit" className="btn btn--primary">Update Password</button>
-              </div>
-            </form>
-          </div>
-        </div>,
-        document.body
-      )}
+      {/* Admin settings modal removed - now managed globally via Ctrl+Shift+S */}
     </div>
   );
 };

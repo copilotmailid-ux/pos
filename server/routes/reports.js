@@ -90,14 +90,30 @@ const getPopulatedPurchases = async (conditions, params) => {
   }));
 };
 
+const getIsoStringFromLocal = (dateStr, timeStr) => {
+  // dateStr is 'YYYY-MM-DD', timeStr is 'HH:MM:SS'
+  const dateParts = dateStr.split('-');
+  const y = Number(dateParts[0]);
+  const m = Number(dateParts[1]) - 1;
+  const d = Number(dateParts[2]);
+  
+  const timeParts = timeStr.split(':');
+  const hr = Number(timeParts[0]);
+  const min = Number(timeParts[1]);
+  const sec = Number(timeParts[2]);
+  
+  const localDate = new Date(y, m, d, hr, min, sec, 999);
+  return localDate.toISOString();
+};
+
 const addDateConditions = (conditions, params, startDate, endDate, dateField) => {
   if (startDate) {
     conditions.push(`${dateField} >= ?`);
-    params.push(`${startDate} 00:00:00`);
+    params.push(getIsoStringFromLocal(startDate, '00:00:00'));
   }
   if (endDate) {
     conditions.push(`${dateField} <= ?`);
-    params.push(`${endDate} 23:59:59`);
+    params.push(getIsoStringFromLocal(endDate, '23:59:59'));
   }
 };
 
@@ -209,18 +225,18 @@ router.get('/gst-summary', async (req, res) => {
         if (effectiveGstQty <= 0) continue;
 
         const rate = item.gstRate !== undefined ? Number(item.gstRate) : 12;
-        const lineTaxable = (item.price || 0) * effectiveGstQty;
-        const lineGst = lineTaxable * (rate / 100);
+        const lineTaxable = round2((item.price || 0) * effectiveGstQty);
+        const lineGst = round2(lineTaxable * (rate / 100));
 
         if (!slabs[rate]) {
           slabs[rate] = { taxableSales: 0, gstAmount: 0 };
         }
 
-        slabs[rate].taxableSales += lineTaxable;
-        slabs[rate].gstAmount += lineGst;
+        slabs[rate].taxableSales = round2(slabs[rate].taxableSales + lineTaxable);
+        slabs[rate].gstAmount = round2(slabs[rate].gstAmount + lineGst);
 
-        totalTaxable += lineTaxable;
-        totalGst += lineGst;
+        totalTaxable = round2(totalTaxable + lineTaxable);
+        totalGst = round2(totalGst + lineGst);
       }
     }
 
@@ -234,7 +250,7 @@ router.get('/gst-summary', async (req, res) => {
       }));
 
     const cgst = round2(totalGst / 2);
-    const sgst = round2(totalGst / 2);
+    const sgst = round2(totalGst - cgst);
     const igst = 0;
 
     const typeSummary = [

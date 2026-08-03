@@ -282,10 +282,13 @@ const Reports = () => {
       const totalRow = new Array(headerRow.length).fill('');
       totalRow[0] = 'TOTAL';
 
-      // Accumulate columns that are numbers
+      // Accumulate columns that are numbers (round at each step to avoid float drift)
       headerRow.forEach((col, idx) => {
         if (col.includes('₹') || col.includes('Amount') || col.includes('Qty') || col.includes('Stock')) {
-          const sum = dataRows.reduce((acc, row) => acc + (Number(String(row[idx]).replace(/[^0-9.]/g, '')) || 0), 0);
+          let sum = 0;
+          for (const row of dataRows) {
+            sum = Math.round((sum + (Number(String(row[idx]).replace(/[^0-9.-]/g, '')) || 0)) * 100) / 100;
+          }
           totalRow[idx] = sum.toFixed(2);
         }
       });

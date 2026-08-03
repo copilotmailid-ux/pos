@@ -124,47 +124,68 @@ const Customers = () => {
       </div>
 
       {/* Summary KPI Widgets */}
-      <div className="dashboard-stats" style={{ marginBottom: 20 }}>
+      <div className="stats-grid" style={{ marginBottom: 24 }}>
         <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#eff6ff', color: '#2563eb' }}><UsersIcon /></div>
-          <div className="stat-info">
-            <span className="stat-title">Loyal Customers</span>
-            <span className="stat-value">{totalUniqueCustomers}</span>
+          <div className="stat-card-body">
+            <div>
+              <p className="stat-card-label">Loyal Customers</p>
+              <p className="stat-card-value">{totalUniqueCustomers}</p>
+            </div>
+            <div className="stat-card-icon stat-card-icon--blue">
+              <UsersIcon />
+            </div>
           </div>
+          <div className="stat-card-bar stat-card-bar--blue"></div>
         </div>
+
         <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#f0fdf4', color: '#16a34a' }}><RupeeIcon /></div>
-          <div className="stat-info">
-            <span className="stat-title">Avg Spend / Customer</span>
-            <span className="stat-value">₹{avgSpendPerCustomer.toFixed(2)}</span>
+          <div className="stat-card-body">
+            <div>
+              <p className="stat-card-label">Avg Spend / Customer</p>
+              <p className="stat-card-value">₹{avgSpendPerCustomer.toFixed(2)}</p>
+            </div>
+            <div className="stat-card-icon stat-card-icon--green">
+              <RupeeIcon />
+            </div>
           </div>
+          <div className="stat-card-bar stat-card-bar--green"></div>
         </div>
+
         <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#fdf2f8', color: '#db2777' }}><CalendarIcon /></div>
-          <div className="stat-info">
-            <span className="stat-title">Top Customer</span>
-            <span className="stat-value" style={{ fontSize: 15, fontWeight: 700, marginTop: 4 }}>
-              {topCustomer ? `${topCustomer.name} (₹${topCustomer.totalSpend.toFixed(2)})` : 'None'}
-            </span>
+          <div className="stat-card-body">
+            <div>
+              <p className="stat-card-label">Top Customer</p>
+              <p className="stat-card-value" style={{ fontSize: topCustomer ? 18 : 30 }}>
+                {topCustomer ? topCustomer.name : 'None'}
+              </p>
+              {topCustomer && <p className="stat-card-sub">Total Spend: ₹{topCustomer.totalSpend.toFixed(2)}</p>}
+            </div>
+            <div className="stat-card-icon stat-card-icon--violet">
+              <CalendarIcon />
+            </div>
           </div>
+          <div className="stat-card-bar stat-card-bar--violet"></div>
         </div>
       </div>
 
       {/* Search Input */}
-      <div className="search-bar" style={{ marginBottom: 20 }}>
-        <span className="search-icon"><SearchIcon /></span>
-        <input
-          type="text"
-          value={search}
-          onChange={handleSearch}
-          placeholder="Search by customer name or 10-digit mobile number..."
-        />
+      <div style={{ marginBottom: 20 }}>
+        <div className="search-input-group" style={{ maxWidth: 450 }}>
+          <SearchIcon className="search-icon" />
+          <input
+            type="text"
+            placeholder="Search by customer name or 10-digit mobile number..."
+            value={search}
+            onChange={handleSearch}
+            className="search-input"
+          />
+        </div>
       </div>
 
       {/* Customers Data Grid */}
       <div className="card">
         <div className="table-wrapper">
-          <table className="data-table">
+          <table className="data-table data-table--bordered">
             <thead>
               <tr>
                 <th>Customer Mobile</th>

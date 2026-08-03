@@ -31,3 +31,7 @@ yarn-error.log*
 Thumbs.db
 *.sqlite
 server/database.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+server/backups/

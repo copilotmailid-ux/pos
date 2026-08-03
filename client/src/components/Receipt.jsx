@@ -1,14 +1,36 @@
+import { useState, useEffect } from 'react';
+import api from '../services/api';
+
 const Receipt = ({ sale, onClose, inline = false }) => {
+  const [settings, setSettings] = useState(null);
+
+  useEffect(() => {
+    api.get('/settings')
+      .then(({ data }) => setSettings(data))
+      .catch((err) => console.error('Error fetching settings for receipt:', err));
+  }, []);
+
   const handlePrint = () => { window.print(); };
   if (!sale) return null;
+
+  const storeName = settings?.storeName || 'SUPERMART';
+  const storeAddress = settings?.storeAddress || '123, Main Street, City';
+  const storePhone = settings?.storePhone || '+91 9876543210';
+  const storeGstin = settings?.storeGstin || '00AAAAA0000A0Z0';
+  const invoiceFooter = settings?.invoiceFooter || 'Thank you for shopping! Visit us again.';
 
   const receiptContent = (
     <div className="print-area receipt">
       <div className="receipt-header">
-        <h2>SUPERMART</h2>
-        <p>123, Main Street, City</p>
-        <p>Ph: +91 9876543210</p>
-        <p>GSTIN: 00AAAAA0000A0Z0</p>
+        {settings?.storeLogo && (
+          <div className="receipt-logo" style={{ textAlign: 'center', marginBottom: 8 }}>
+            <img src={settings.storeLogo} alt="Logo" style={{ maxHeight: 50, maxWidth: 120 }} />
+          </div>
+        )}
+        <h2>{storeName.toUpperCase()}</h2>
+        <p>{storeAddress}</p>
+        <p>{storePhone.startsWith('Ph:') ? storePhone : `Ph: ${storePhone}`}</p>
+        {storeGstin && <p>{storeGstin.startsWith('GSTIN:') ? storeGstin : `GSTIN: ${storeGstin}`}</p>}
       </div>
 
       <div className="receipt-info">
@@ -75,8 +97,7 @@ const Receipt = ({ sale, onClose, inline = false }) => {
       </div>
 
       <div className="receipt-footer">
-        <p>Thank you for shopping!</p>
-        <p>Visit us again</p>
+        <p>{invoiceFooter}</p>
       </div>
     </div>
   );

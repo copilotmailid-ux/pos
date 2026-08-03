@@ -147,33 +147,29 @@ const Suppliers = () => {
 
   return (
     <div className="page-container animate-fade-in">
-      <div className="page-header">
-        <div>
-          <h1>Suppliers Registry</h1>
-          <p>Manage product vendors, GST/Non-GST tax classification, and track supply invoice purchase histories.</p>
-        </div>
+      <div className="page-header-row">
+        <h1 style={{ fontSize: 26, fontWeight: 700, color: 'var(--slate-800)' }}>Suppliers Registry</h1>
         <button onClick={openAdd} className="btn btn--primary">
           <HiOutlinePlus /> Add Supplier Profile
         </button>
       </div>
 
-      <div className="suppliers-layout">
-        <div className="filter-bar card">
-          <div className="search-box">
-            <HiOutlineSearch className="search-icon" />
-            <input
-              type="text"
-              className="search-input"
-              placeholder="Search by supplier name, contact person, or phone number..."
-              value={search}
-              onChange={handleSearch}
-            />
-          </div>
+      <div style={{ marginBottom: 20 }}>
+        <div className="search-input-group" style={{ maxWidth: 500 }}>
+          <HiOutlineSearch className="search-icon" />
+          <input
+            type="text"
+            className="search-input"
+            placeholder="Search by supplier name, contact person, or phone number..."
+            value={search}
+            onChange={handleSearch}
+          />
         </div>
+      </div>
 
         <div className="card">
           <div className="table-wrapper">
-            <table className="data-table">
+            <table className="data-table data-table--bordered">
               <thead>
                 <tr>
                   <th>Supplier Name</th>
@@ -220,7 +216,6 @@ const Suppliers = () => {
             </table>
           </div>
         </div>
-      </div>
 
       {/* Add/Edit Modal */}
       {modalOpen && createPortal(
@@ -367,7 +362,7 @@ const Suppliers = () => {
                   </div>
                 ) : (
                   <div className="table-wrapper">
-                    <table className="data-table" style={{ fontSize: 13 }}>
+                    <table className="data-table data-table--bordered" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
                       <thead>
                         <tr>
                           <th>Purchase No</th>

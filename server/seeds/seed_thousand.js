@@ -28,7 +28,7 @@ const seedThousandProducts = () => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    for (let i = 1; i <= 2500; i++) {
+    for (let i = 1; i <= 5; i++) {
       const brand = brands[Math.floor(Math.random() * brands.length)];
       const item = items[Math.floor(Math.random() * items.length)];
       const category = categories[Math.floor(Math.random() * categories.length)];
@@ -70,7 +70,7 @@ const seedThousandProducts = () => {
         console.error('Commit failed:', err.message);
         process.exit(1);
       } else {
-        console.log(`Successfully generated and seeded 2500 unique products in SQLite!`);
+        console.log(`Successfully generated and seeded 5 unique products in SQLite!`);
         db.close();
         process.exit(0);
       }

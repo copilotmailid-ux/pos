@@ -396,9 +396,7 @@ textarea {
 }
 
 .login-card {
-  background: rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  background: rgba(30, 41, 59, 0.98);
   border-radius: var(--radius-2xl);
   padding: 32px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -506,8 +504,22 @@ textarea {
 }
 
 @media (min-width: 1024px) {
+
+  /* Default locked open state for other pages */
   .layout-main {
     margin-left: 200px;
+    transition: margin-left var(--transition-slow);
+  }
+
+  /* Collapsed state ONLY on the Billing page */
+  .layout--billing-focus .layout-main {
+    margin-left: 60px !important;
+    transition: margin-left var(--transition-slow);
+  }
+
+  /* Push main layout when sidebar is hovered (only on Billing page) */
+  .layout--billing-focus .sidebar:hover+.layout-main {
+    margin-left: 200px !important;
   }
 }
 
@@ -516,9 +528,7 @@ textarea {
   position: sticky;
   top: 0;
   z-index: 30;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: white;
   border-bottom: 1px solid rgba(226, 232, 240, 0.5);
   padding: 12px 16px;
   display: flex;
@@ -562,8 +572,7 @@ textarea {
 .sidebar-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.5);
   z-index: 40;
 }
 
@@ -584,7 +593,7 @@ textarea {
   color: white;
   display: flex;
   flex-direction: column;
-  transition: transform var(--transition-slow);
+  transition: transform var(--transition-slow), width var(--transition-slow);
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15);
 }
 
@@ -593,8 +602,123 @@ textarea {
 }
 
 @media (min-width: 1024px) {
+
+  /* Default locked open state for other pages */
   .sidebar {
     transform: translateX(0) !important;
+    width: 200px;
+  }
+
+  /* Collapsed state ONLY on the Billing page */
+  .layout--billing-focus .sidebar {
+    width: 60px;
+    overflow: hidden;
+  }
+
+  .layout--billing-focus .sidebar:hover {
+    width: 200px;
+    box-shadow: 6px 0 30px rgba(0, 0, 0, 0.25);
+  }
+
+  /* Fade out texts inside sidebar when collapsed (only in billing focus layout) */
+  .layout--billing-focus .sidebar-brand-text,
+  .layout--billing-focus .sidebar-clock,
+  .layout--billing-focus .sidebar-user-info,
+  .layout--billing-focus .sidebar-link span:last-child,
+  .layout--billing-focus .sidebar-logout span:last-child {
+    opacity: 0;
+    white-space: nowrap;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+  }
+
+  /* Fade in texts inside sidebar on hover (in billing focus layout) */
+  .layout--billing-focus .sidebar:hover .sidebar-brand-text,
+  .layout--billing-focus .sidebar:hover .sidebar-clock,
+  .layout--billing-focus .sidebar:hover .sidebar-user-info,
+  .layout--billing-focus .sidebar:hover .sidebar-link span:last-child,
+  .layout--billing-focus .sidebar:hover .sidebar-logout span:last-child {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Smoothen padding and gaps when collapsed vs expanded (only in billing focus layout) */
+  .layout--billing-focus .sidebar-brand {
+    gap: 0;
+    transition: gap 0.3s ease;
+  }
+
+  .layout--billing-focus .sidebar:hover .sidebar-brand {
+    gap: 12px;
+  }
+
+  .layout--billing-focus .sidebar-brand-icon {
+    flex-shrink: 0;
+    margin-left: -4px;
+    transition: margin-left 0.3s ease;
+  }
+
+  .layout--billing-focus .sidebar:hover .sidebar-brand-icon {
+    margin-left: 0;
+  }
+
+  .layout--billing-focus .sidebar-clock {
+    margin: 8px;
+    padding: 6px;
+    height: 50px;
+    overflow: hidden;
+    transition: all 0.3s ease;
+  }
+
+  .layout--billing-focus .sidebar:hover .sidebar-clock {
+    margin: 16px;
+    padding: 12px;
+    height: 70px;
+  }
+
+  .layout--billing-focus .sidebar-link,
+  .layout--billing-focus .sidebar-logout {
+    padding: 10px 16px;
+    gap: 0;
+    transition: gap 0.3s ease, padding 0.3s ease;
+  }
+
+  .layout--billing-focus .sidebar:hover .sidebar-link,
+  .layout--billing-focus .sidebar:hover .sidebar-logout {
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .layout--billing-focus .sidebar-link .icon,
+  .layout--billing-focus .sidebar-logout .icon {
+    margin-left: -2px;
+    transition: margin-left 0.3s ease;
+  }
+
+  .layout--billing-focus .sidebar:hover .sidebar-link .icon,
+  .layout--billing-focus .sidebar:hover .sidebar-logout .icon {
+    margin-left: 0;
+  }
+
+  .layout--billing-focus .sidebar-user {
+    gap: 0;
+    padding: 8px 12px;
+    transition: gap 0.3s ease, padding 0.3s ease;
+  }
+
+  .layout--billing-focus .sidebar:hover .sidebar-user {
+    gap: 10px;
+    padding: 8px 8px;
+  }
+
+  .layout--billing-focus .sidebar-avatar {
+    flex-shrink: 0;
+    margin-left: -2px;
+    transition: margin-left 0.3s ease;
+  }
+
+  .layout--billing-focus .sidebar:hover .sidebar-avatar {
+    margin-left: 0;
   }
 }
 
@@ -604,6 +728,34 @@ textarea {
   justify-content: space-between;
   padding: 16px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-clock {
+  padding: 12px;
+  margin: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-clock-time {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+  font-family: monospace, sans-serif;
+  letter-spacing: 0.5px;
+}
+
+.sidebar-clock-date {
+  font-size: 11px;
+  color: var(--slate-400);
+  margin-top: 4px;
+  text-transform: uppercase;
+  font-weight: 600;
 }
 
 .sidebar-brand {
@@ -827,9 +979,9 @@ textarea {
   }
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 1024px) {
   .stats-grid {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 
@@ -1411,8 +1563,7 @@ body.modal-open {
 .modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.55);
 }
 
 .modal {
@@ -1433,7 +1584,7 @@ body.modal-open {
 }
 
 .modal--lg {
-  max-width: 520px;
+  max-width: 720px;
 }
 
 .modal-header {
@@ -2024,8 +2175,7 @@ body.modal-open {
 .low-stock-banner-icon {
   padding: 16px;
   border-radius: var(--radius-lg);
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.25);
   font-size: 32px;
   display: flex;
 }
@@ -2209,6 +2359,90 @@ body.modal-open {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ==========================================================
+   POS BILLING SEARCH CONTROLS
+   ========================================================== */
+.search-input-group {
+  display: flex;
+  background: white;
+  border: 1px solid var(--slate-200);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  align-items: center;
+  transition: var(--transition-fast);
+  width: 100%;
+}
+
+.search-input-group:focus-within {
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.search-input-group input {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 12px 16px !important;
+  height: 48px !important;
+  font-size: 14px !important;
+  flex: 1;
+  background: transparent !important;
+}
+
+.search-input-group .input-label {
+  background: var(--slate-50);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--slate-400);
+  border-left: 1px solid var(--slate-200);
+  user-select: none;
+  align-self: stretch;
+}
+
+.search-input-group .search-icon {
+  color: var(--slate-400);
+  margin-left: 14px;
+  flex-shrink: 0;
+}
+
+/* ==========================================================
+   BORDERED DATA TABLE FOR POS SPREADSHEET LAYOUT
+   ========================================================== */
+.data-table--bordered {
+  border-collapse: collapse !important;
+  width: 100%;
+}
+
+.data-table--bordered th {
+  border: 1px solid var(--slate-200) !important;
+  background: var(--slate-50) !important;
+  padding: 10px 14px !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--slate-600) !important;
+}
+
+.data-table--bordered td {
+  border: 1px solid var(--slate-200) !important;
+  padding: 10px 14px !important;
+  font-size: 13.5px !important;
+  vertical-align: middle;
+}
+
+.data-table--bordered tbody tr {
+  border-top: none !important;
+}
+
+.data-table--bordered tbody tr:hover {
+  background: rgba(99, 102, 241, 0.03) !important;
 }
 
 /* ==========================================================

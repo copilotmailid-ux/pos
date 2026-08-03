@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -11,7 +12,8 @@ import {
   HiOutlineUsers,
   HiOutlineTruck,
   HiOutlineBriefcase,
-  HiOutlineTrendingUp
+  HiOutlineTrendingUp,
+  HiOutlineCog
 } from 'react-icons/hi';
 
 const navItems = [
@@ -29,6 +31,29 @@ const navItems = [
 const Sidebar = ({ isOpen, onClose }) => {
   const { logout, user } = useAuth();
   const navigate = useNavigate();
+
+  const [dateTime, setDateTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDateTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formattedTime = dateTime.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+
+  const formattedDate = dateTime.toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
 
   const handleLogout = () => {
     logout();
@@ -53,6 +78,11 @@ const Sidebar = ({ isOpen, onClose }) => {
           <button onClick={onClose} className="sidebar-close">
             <HiOutlineX />
           </button>
+        </div>
+
+        <div className="sidebar-clock">
+          <div className="sidebar-clock-time">{formattedTime}</div>
+          <div className="sidebar-clock-date">{formattedDate}</div>
         </div>
 
         <nav className="sidebar-nav">

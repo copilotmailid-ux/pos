@@ -7,6 +7,8 @@ router.use(protect);
 
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+let invoiceCount = 0;
+
 // Helper to retrieve a complete sale populated with items in the MongoDB style
 const getCompleteSale = async (saleId) => {
   const sale = await get(`SELECT * FROM sales WHERE id = ?`, [saleId]);
@@ -133,17 +135,18 @@ router.post('/', async (req, res) => {
       }
 
       const cgstAmount = round2(totalTax / 2);
-      const sgstAmount = round2(totalTax / 2);
+      const sgstAmount = round2(totalTax - cgstAmount);
       const grandTotal = round2(subtotal + totalTax);
 
       const finalAmountPaid = amountPaid !== undefined ? Number(amountPaid) : grandTotal;
       const finalChangeReturned = changeReturned !== undefined ? Number(changeReturned) : 0;
 
-      // Insert sale
+      // Insert sale (Explicitly insert timezone-aware ISO string for createdAt and updatedAt)
+      const nowStr = new Date().toISOString();
       const { id: saleId } = await run(
-        `INSERT INTO sales (invoiceNo, customerMobile, customerName, paymentMethod, amountPaid, changeReturned, subtotal, gstSubtotal, nonGstSubtotal, taxAmount, cgstAmount, sgstAmount, grandTotal, reportGstTax, reportNonGstAmount, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [invoiceNo, customerMobile || '', customerName || '', paymentMethod || 'Cash Tendered', finalAmountPaid, finalChangeReturned, subtotal, gstSubtotal, nonGstSubtotal, totalTax, cgstAmount, sgstAmount, grandTotal, reportGstTaxSum, reportNonGstAmountSum, 'Completed']
+        `INSERT INTO sales (invoiceNo, customerMobile, customerName, paymentMethod, amountPaid, changeReturned, subtotal, gstSubtotal, nonGstSubtotal, taxAmount, cgstAmount, sgstAmount, grandTotal, reportGstTax, reportNonGstAmount, status, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [invoiceNo, customerMobile || '', customerName || '', paymentMethod || 'Cash Tendered', finalAmountPaid, finalChangeReturned, subtotal, gstSubtotal, nonGstSubtotal, totalTax, cgstAmount, sgstAmount, grandTotal, reportGstTaxSum, reportNonGstAmountSum, 'Completed', nowStr, nowStr]
       );
 
       // Insert sale items
@@ -160,6 +163,15 @@ router.post('/', async (req, res) => {
 
     const completeSale = await getCompleteSale(processedSale);
     res.status(201).json(completeSale);
+
+    // Auto-checkpoint WAL log every 5 invoices
+    invoiceCount++;
+    if (invoiceCount % 5 === 0) {
+      console.log(`Every 5 invoices reached (${invoiceCount}). Running automatic WAL checkpoint (merging log)...`);
+      run('PRAGMA wal_checkpoint(TRUNCATE)')
+        .then(() => console.log('Automatic WAL Checkpoint complete.'))
+        .catch(err => console.error('Automatic WAL Checkpoint failed:', err.message));
+    }
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
@@ -373,6 +385,19 @@ router.post('/:id/cancel', async (req, res) => {
     res.json({ message: 'Invoice cancelled successfully', sale: updated });
   } catch (error) {
     res.status(500).json({ message: 'Server error cancelling sale', error: error.message });
+  }
+});
+
+// @route   POST /api/sales/backup
+// @desc    Trigger an on-demand database compaction backup
+// @access  Private
+router.post('/backup', async (req, res) => {
+  try {
+    const { backupDatabase } = require('../config/db');
+    const backupFile = await backupDatabase();
+    res.json({ message: 'Backup created successfully', path: backupFile });
+  } catch (error) {
+    res.status(500).json({ message: 'Backup execution error', error: error.message });
   }
 });
 

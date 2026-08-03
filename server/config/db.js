@@ -2,8 +2,19 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 
+const colors = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[36m',
+  gray: '\x1b[90m',
+  red: '\x1b[31m'
+};
+
 const dbPath = process.env.SQLITE_DB_PATH || path.join(__dirname, '..', 'database.sqlite');
-console.log('Using SQLite database at:', dbPath);
+console.log(`${colors.blue}ℹ [DB]${colors.reset}      Database path: ${colors.dim}${dbPath}${colors.reset}`);
 
 // Ensure parent directory exists
 const parentDir = path.dirname(dbPath);
@@ -12,6 +23,17 @@ if (!fs.existsSync(parentDir)) {
 }
 
 const db = new sqlite3.Database(dbPath);
+
+// Enable WAL (Write-Ahead Logging) mode
+db.serialize(() => {
+  db.run("PRAGMA journal_mode=WAL;", (err) => {
+    if (err) {
+      console.error(`${colors.red}✖ [DB]${colors.reset}      Failed to enable WAL mode: ${err.message}`);
+    } else {
+      console.log(`${colors.green}✔ [DB]${colors.reset}      SQLite WAL (Write-Ahead Logging) Mode Enabled`);
+    }
+  });
+});
 
 const get = (sql, params = []) => {
   return new Promise((resolve, reject) => {
@@ -181,6 +203,24 @@ const initializeDB = async () => {
     `CREATE TABLE IF NOT EXISTS counters (
       id TEXT PRIMARY KEY,
       seq INTEGER DEFAULT 0
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS settings (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      storeName TEXT DEFAULT 'SuperMart',
+      storeAddress TEXT DEFAULT '123, Main Street, City',
+      storePhone TEXT DEFAULT '+91 9876543210',
+      storeGstin TEXT DEFAULT '00AAAAA0000A0Z0',
+      receiptFooter TEXT DEFAULT 'Thank you for shopping with us!',
+      defaultPaymentMethod TEXT DEFAULT 'Cash Tendered',
+      defaultGstRate INTEGER DEFAULT 12,
+      backupRetention INTEGER DEFAULT 5,
+      autoPrint INTEGER DEFAULT 0,
+      barcodeAutoSubmit INTEGER DEFAULT 1,
+      storeLogo TEXT DEFAULT '',
+      printerName TEXT DEFAULT '',
+      paperSize TEXT DEFAULT '80mm',
+      backupPath TEXT DEFAULT ''
     )`
   ];
 
@@ -199,6 +239,40 @@ const initializeDB = async () => {
   const countRow = await get(`SELECT COUNT(*) as count FROM counters WHERE id = 'invoiceNo'`);
   if (countRow.count === 0) {
     await run(`INSERT INTO counters (id, seq) VALUES ('invoiceNo', 0)`);
+  }
+
+  // Seed initial settings table row if empty
+  const settingsCountRow = await get(`SELECT COUNT(*) as count FROM settings`);
+  if (settingsCountRow.count === 0) {
+    await run(`
+      INSERT INTO settings (id, storeName, storeAddress, storePhone, storeGstin, receiptFooter, defaultPaymentMethod, defaultGstRate, backupRetention, autoPrint, barcodeAutoSubmit, storeLogo, printerName, paperSize)
+      VALUES (1, 'SuperMart', '123, Main Street, City', '+91 9876543210', '00AAAAA0000A0Z0', 'Thank you for shopping with us!', 'Cash Tendered', 12, 5, 0, 1, '', '', '80mm')
+    `);
+  }
+
+  // Migration: Add new columns if missing from existing settings table
+  try {
+    const tableInfo = await all(`PRAGMA table_info(settings)`);
+    const columns = tableInfo.map(c => c.name);
+    
+    if (!columns.includes('storeLogo')) {
+      await exec(`ALTER TABLE settings ADD COLUMN storeLogo TEXT DEFAULT ''`);
+      console.log('Migrated settings: Added storeLogo column.');
+    }
+    if (!columns.includes('printerName')) {
+      await exec(`ALTER TABLE settings ADD COLUMN printerName TEXT DEFAULT ''`);
+      console.log('Migrated settings: Added printerName column.');
+    }
+    if (!columns.includes('paperSize')) {
+      await exec(`ALTER TABLE settings ADD COLUMN paperSize TEXT DEFAULT '80mm'`);
+      console.log('Migrated settings: Added paperSize column.');
+    }
+    if (!columns.includes('backupPath')) {
+      await exec(`ALTER TABLE settings ADD COLUMN backupPath TEXT DEFAULT ''`);
+      console.log('Migrated settings: Added backupPath column.');
+    }
+  } catch (err) {
+    console.error('Migration error for settings table:', err.message);
   }
 
   // Auto-sync invoice counter based on existing sales records
@@ -222,6 +296,62 @@ const syncInvoiceCounter = async () => {
   }
 };
 
+const backupDatabase = () => {
+  return new Promise((resolve, reject) => {
+    try {
+      const backupsDir = path.join(path.dirname(dbPath), 'backups');
+      if (!fs.existsSync(backupsDir)) {
+        fs.mkdirSync(backupsDir, { recursive: true });
+      }
+
+      const now = new Date();
+      const localTimestamp = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+        .toISOString()
+        .replace(/Z$/, '')
+        .replace(/[:.]/g, '-');
+      const backupFile = path.join(backupsDir, `backup_${localTimestamp}.sqlite`);
+
+      // SQLite atomic VACUUM INTO copies active WAL and main db into a single consolidated file
+      db.run(`VACUUM INTO ?`, [backupFile], (err) => {
+        if (err) {
+          console.error(`${colors.red}✖ [BACKUP]${colors.reset}  Database backup failed: ${err.message}`);
+          reject(err);
+        } else {
+          console.log(`${colors.green}📦 [BACKUP]${colors.reset}  Database backup saved to: ${colors.dim}${backupFile}${colors.reset}`);
+          cleanOldBackups(backupsDir, 5);
+          resolve(backupFile);
+        }
+      });
+    } catch (err) {
+      console.error(`${colors.red}✖ [BACKUP]${colors.reset}  Database backup error: ${err.message}`);
+      reject(err);
+    }
+  });
+};
+
+const cleanOldBackups = (dir, keepCount) => {
+  try {
+    const files = fs.readdirSync(dir)
+      .filter(f => f.startsWith('backup_') && f.endsWith('.sqlite'))
+      .map(f => ({
+        name: f,
+        path: path.join(dir, f),
+        time: fs.statSync(path.join(dir, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.time - a.time); // Newest first
+
+    if (files.length > keepCount) {
+      const extraFiles = files.slice(keepCount);
+      for (const file of extraFiles) {
+        fs.unlinkSync(file.path);
+        console.log(`${colors.yellow}🧹 [CLEANUP]${colors.reset} Deleted old backup: ${colors.dim}${file.name}${colors.reset}`);
+      }
+    }
+  } catch (err) {
+    console.error(`${colors.red}✖ [CLEANUP]${colors.reset} Error cleaning old backups: ${err.message}`);
+  }
+};
+
 module.exports = {
   db,
   get,
@@ -230,5 +360,6 @@ module.exports = {
   exec,
   transaction,
   initializeDB,
-  syncInvoiceCounter
+  syncInvoiceCounter,
+  backupDatabase
 };

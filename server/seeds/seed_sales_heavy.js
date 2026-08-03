@@ -54,7 +54,7 @@ const seedHeavySales = async () => {
       db.run("DELETE FROM sales");
       db.run("DELETE FROM sale_items");
       db.run("DELETE FROM counters WHERE id = 'invoiceNo'");
-      db.run("INSERT INTO counters (id, seq) VALUES ('invoiceNo', 10000)");
+      db.run("INSERT INTO counters (id, seq) VALUES ('invoiceNo', 4)");
 
       const saleStmt = db.prepare(`
         INSERT INTO sales (id, invoiceNo, customerMobile, customerName, paymentMethod, amountPaid, changeReturned, subtotal, gstSubtotal, nonGstSubtotal, taxAmount, cgstAmount, sgstAmount, grandTotal, reportGstTax, reportNonGstAmount, status, createdAt, updatedAt)
@@ -66,7 +66,7 @@ const seedHeavySales = async () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      const totalSalesToSeed = 10000;
+      const totalSalesToSeed = 4;
       const now = new Date();
 
       // Build a running stock tracker to FIFO allocate gstStock vs nonGstStock across sales
@@ -93,7 +93,7 @@ const seedHeavySales = async () => {
         let reportNonGstAmountSum = 0;
 
         const saleDate = new Date(now);
-        const daysAgo = Math.floor(Math.random() * 30);
+        const daysAgo = 0; // Set to 0 to make seeded sales show up in "Today's Sales" on the dashboard
         const hour = Math.floor(Math.random() * 12) + 9; // 9 AM to 9 PM
         const minute = Math.floor(Math.random() * 60);
         saleDate.setDate(saleDate.getDate() - daysAgo);
@@ -128,22 +128,22 @@ const seedHeavySales = async () => {
             }
           }
 
-          const itemSubtotal = product.sellingPrice * qty;
-          const itemTax = itemSubtotal * (itemGst / 100);
-          const itemGstSubtotal = product.sellingPrice * gstQty;
-          const itemNonGstSubtotal = product.sellingPrice * nonGstQty;
+          const itemSubtotal = Number((product.sellingPrice * qty).toFixed(2));
+          const itemTax = Number((itemSubtotal * (itemGst / 100)).toFixed(2));
+          const itemGstSubtotal = Number((product.sellingPrice * gstQty).toFixed(2));
+          const itemNonGstSubtotal = Number((product.sellingPrice * nonGstQty).toFixed(2));
 
-          const reportGstTax = itemGstSubtotal * (itemGst / 100);
-          const reportNonGstAmount = itemNonGstSubtotal;
+          const reportGstTax = Number((itemGstSubtotal * (itemGst / 100)).toFixed(2));
+          const reportNonGstAmount = Number((itemNonGstSubtotal + Number((itemNonGstSubtotal * (itemGst / 100)).toFixed(2))).toFixed(2));
 
-          subtotal += itemSubtotal;
-          taxAmount += itemTax;
-          gstSubtotal += itemGstSubtotal;
-          nonGstSubtotal += itemNonGstSubtotal;
-          reportGstTaxSum += reportGstTax;
-          reportNonGstAmountSum += reportNonGstAmount;
+          subtotal = Number((subtotal + itemSubtotal).toFixed(2));
+          taxAmount = Number((taxAmount + itemTax).toFixed(2));
+          gstSubtotal = Number((gstSubtotal + itemGstSubtotal).toFixed(2));
+          nonGstSubtotal = Number((nonGstSubtotal + itemNonGstSubtotal).toFixed(2));
+          reportGstTaxSum = Number((reportGstTaxSum + reportGstTax).toFixed(2));
+          reportNonGstAmountSum = Number((reportNonGstAmountSum + reportNonGstAmount).toFixed(2));
 
-          const totalLineVal = itemSubtotal + itemTax;
+          const totalLineVal = Number((itemSubtotal + itemTax).toFixed(2));
 
           itemStmt.run(
             saleId,
@@ -156,19 +156,19 @@ const seedHeavySales = async () => {
             nonGstQty,
             product.sellingPrice,
             product.purchasePrice || 0,
-            Number(totalLineVal.toFixed(2)),
+            totalLineVal,
             itemGst,
-            Number(itemTax.toFixed(2)),
-            Number(reportGstTax.toFixed(2)),
-            Number(reportNonGstAmount.toFixed(2)),
+            itemTax,
+            reportGstTax,
+            reportNonGstAmount,
             saleDateStr,
             saleDateStr
           );
         }
 
-        const grandTotal = subtotal + taxAmount;
-        const cgstAmount = taxAmount / 2;
-        const sgstAmount = taxAmount / 2;
+        const grandTotal = Number((subtotal + taxAmount).toFixed(2));
+        const cgstAmount = Number((taxAmount / 2).toFixed(2));
+        const sgstAmount = Number((taxAmount - cgstAmount).toFixed(2));
 
         const method = paymentMethods[Math.floor(Math.random() * paymentMethods.length)];
         let amountPaid = grandTotal;
@@ -209,7 +209,7 @@ const seedHeavySales = async () => {
           console.error('Commit failed:', err.message);
           process.exit(1);
         } else {
-          console.log(`Successfully seeded exactly 10000 sales receipts and sale_items in SQLite!`);
+          console.log(`Successfully seeded exactly 4 sales receipts and sale_items in SQLite!`);
           db.close();
           process.exit(0);
         }

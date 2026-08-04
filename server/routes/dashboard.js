@@ -105,23 +105,21 @@ router.get('/', async (req, res) => {
       const returnedQty = item.returnedQuantity || 0;
       const netQty = Math.max(0, qty - returnedQty);
       
-      // Basic pre-tax margin profit
-      const baseProfit = ((item.price || 0) - (item.purchasePrice || 0)) * netQty;
+      // Basic pre-tax margin profit (round at each step to avoid float drift)
+      const baseProfit = round2(((item.price || 0) - (item.purchasePrice || 0)) * netQty);
       
       // Calculate collected Non-GST tax (extra profit retained by the store)
       const nonGstQty = item.nonGstQuantity || 0;
       const returnedNonGstQty = Math.max(0, returnedQty - (item.gstQuantity || 0));
       const effectiveNonGstQty = Math.max(0, nonGstQty - returnedNonGstQty);
       
-      const nonGstSubtotal = (item.price || 0) * effectiveNonGstQty;
+      const nonGstSubtotal = round2((item.price || 0) * effectiveNonGstQty);
       const rate = item.gstRate !== undefined ? Number(item.gstRate) : 12;
-      const collectedNonGstTax = nonGstSubtotal * (rate / 100);
+      const collectedNonGstTax = round2(nonGstSubtotal * (rate / 100));
       
-      todayProfit += baseProfit;
-      todayNonGstTaxProfit += collectedNonGstTax;
+      todayProfit = round2(todayProfit + baseProfit);
+      todayNonGstTaxProfit = round2(todayNonGstTaxProfit + collectedNonGstTax);
     }
-    todayProfit = round2(todayProfit);
-    todayNonGstTaxProfit = round2(todayNonGstTaxProfit);
 
     // Pagination parameters
     const page = Number(req.query.page || 1);

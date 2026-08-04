@@ -101,13 +101,14 @@ router.post('/', async (req, res) => {
 
         const itemGstRate = product.gstRate ?? 12;
         const itemSubtotal = round2(product.sellingPrice * totalQtyNeeded);
-        const fullItemTax = round2(itemSubtotal * (itemGstRate / 100));
 
         const itemGstSubtotal = round2(product.sellingPrice * allocGst);
         const itemNonGstSubtotal = round2(product.sellingPrice * allocNonGst);
         
         const itemReportGstTax = round2(itemGstSubtotal * (itemGstRate / 100));
-        const itemReportNonGstAmount = round2(itemNonGstSubtotal + round2(itemNonGstSubtotal * (itemGstRate / 100)));
+        const itemReportNonGstTax = round2(itemNonGstSubtotal * (itemGstRate / 100));
+        const fullItemTax = round2(itemReportGstTax + itemReportNonGstTax);
+        const itemReportNonGstAmount = round2(itemNonGstSubtotal + itemReportNonGstTax);
 
         subtotal = round2(subtotal + itemSubtotal);
         gstSubtotal = round2(gstSubtotal + itemGstSubtotal);

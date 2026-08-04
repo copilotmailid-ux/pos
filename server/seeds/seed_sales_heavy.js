@@ -129,12 +129,13 @@ const seedHeavySales = async () => {
           }
 
           const itemSubtotal = Number((product.sellingPrice * qty).toFixed(2));
-          const itemTax = Number((itemSubtotal * (itemGst / 100)).toFixed(2));
           const itemGstSubtotal = Number((product.sellingPrice * gstQty).toFixed(2));
           const itemNonGstSubtotal = Number((product.sellingPrice * nonGstQty).toFixed(2));
 
           const reportGstTax = Number((itemGstSubtotal * (itemGst / 100)).toFixed(2));
-          const reportNonGstAmount = Number((itemNonGstSubtotal + Number((itemNonGstSubtotal * (itemGst / 100)).toFixed(2))).toFixed(2));
+          const reportNonGstTax = Number((itemNonGstSubtotal * (itemGst / 100)).toFixed(2));
+          const itemTax = Number((reportGstTax + reportNonGstTax).toFixed(2));
+          const reportNonGstAmount = Number((itemNonGstSubtotal + reportNonGstTax).toFixed(2));
 
           subtotal = Number((subtotal + itemSubtotal).toFixed(2));
           taxAmount = Number((taxAmount + itemTax).toFixed(2));

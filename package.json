@@ -6,8 +6,9 @@
   "scripts": {
     "start": "electron .",
     "build:client": "cd client && npm run build",
-    "pack": "npm run build:client && electron-packager . \"SuperMart POS\" --platform=win32 --arch=x64 --out=dist-desktop --overwrite --asar --ignore=\"(/client/node_modules|/client/src|/client/public|/dist-desktop|/server/database\\\\.sqlite|/\\\\.git|/backup\\\\.bat)\"",
-    "dist": "npm run build:client && electron-builder --win"
+    "pack": "npm run build:client && electron-packager . \"SuperMart POS\" --platform=win32 --arch=x64 --out=dist-desktop --overwrite --asar --ignore=\"(/client/node_modules|/client/src|/client/public|/dist-desktop|/server/database\\\\.sqlite|/\\\\.git|/backup\\\\.bat)\" --extra-resource=server/database.sqlite",
+    "dist": "npm run build:client && electron-builder --win",
+    "pack:secure": "node scripts/build-secure.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -18,7 +19,8 @@
   "devDependencies": {
     "electron": "^31.0.0",
     "electron-builder": "^24.13.0",
-    "electron-packager": "^17.1.2"
+    "electron-packager": "^17.1.2",
+    "javascript-obfuscator": "^5.10.0"
   },
   "build": {
     "appId": "com.supermart.pos",
@@ -28,7 +30,7 @@
       "server/**/*",
       "client/dist/**/*"
     ],
-    "asar": false,
+    "asar": true,
     "npmRebuild": false,
     "directories": {
       "output": "dist-desktop"

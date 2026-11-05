@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, clipboard } = require('electron');
 // Disable hardware acceleration to save memory and make launch instant on POS machines
 app.disableHardwareAcceleration();
 const path = require('path');
@@ -33,12 +33,23 @@ function writeLog(message) {
   }
 }
 
-// Global Exception Handling
+// Global Exception Handling with support helpline and auto-clipboard copy
 process.on('uncaughtException', (err) => {
+  writeLog(`CRITICAL: Uncaught Exception in Electron Main Process: ${err.stack || err.message}`);
   console.error('CRITICAL: Uncaught Exception in Electron Main Process:', err);
+  try {
+    clipboard.writeText(`=== SUPERMART POS ELECTRON ERROR ===\nHelpline: 9360480902\n${err.stack || err.message}`);
+  } catch (_) {}
+  try {
+    dialog.showErrorBox(
+      'POS Terminal Alert',
+      `An unexpected system error occurred in the desktop POS shell.\n\nError: ${err.message}\n(Error details have been copied to clipboard)\n\nSupport Helpline: 9360480902`
+    );
+  } catch (_) {}
 });
 
 process.on('unhandledRejection', (reason) => {
+  writeLog(`CRITICAL: Unhandled Rejection in Electron Main Process: ${reason}`);
   console.error('CRITICAL: Unhandled Rejection in Electron Main Process:', reason);
 });
 
@@ -155,13 +166,39 @@ if (!gotSingleInstanceLock) {
 
     const serverPath = path.join(__dirname, 'server', 'server.js');
 
+    const userDataDir = app.getPath('userData');
+    const userDbPath = path.join(userDataDir, 'database.sqlite');
+
+    if (!fs.existsSync(userDbPath)) {
+      const candidates = [
+        path.join(process.resourcesPath || '', 'database.sqlite'),
+        path.join(process.resourcesPath || '', 'server', 'database.sqlite'),
+        path.join(__dirname, 'server', 'database.sqlite'),
+        path.join(__dirname, '..', 'server', 'database.sqlite')
+      ];
+      for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+          try {
+            if (!fs.existsSync(userDataDir)) {
+              fs.mkdirSync(userDataDir, { recursive: true });
+            }
+            fs.copyFileSync(candidate, userDbPath);
+            writeLog('[DB Initializer] Successfully copied database from ' + candidate + ' to ' + userDbPath);
+            break;
+          } catch (copyErr) {
+            writeLog('[DB Initializer] Error copying database from ' + candidate + ': ' + copyErr.message);
+          }
+        }
+      }
+    }
+
     serverProcess = fork(serverPath, [], {
       silent: true,
       env: {
         ...process.env,
         PORT: 5000,
         NODE_ENV: 'production',
-        SQLITE_DB_PATH: path.join(app.getPath('userData'), 'database.sqlite')
+        SQLITE_DB_PATH: userDbPath
       }
     });
 
@@ -248,9 +285,13 @@ if (!gotSingleInstanceLock) {
       autoHideMenuBar: true,
       webPreferences: {
         nodeIntegration: false,
-        contextIsolation: true
+        contextIsolation: true,
+        devTools: process.env.NODE_ENV !== 'production'
       }
     });
+
+    // Security: Block any unverified external window/pop-up creation
+    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
     // Renderer Crash Recovery
     mainWindow.webContents.on('render-process-gone', (event, details) => {
@@ -258,7 +299,7 @@ if (!gotSingleInstanceLock) {
       dialog.showMessageBox(mainWindow, {
         type: 'warning',
         title: 'POS Terminal Alert',
-        message: 'The rendering process experienced an unexpected issue. The terminal interface will reload automatically.',
+        message: `The terminal rendering process encountered an unexpected issue and will reload automatically.\n\nSupport Helpline: 9360480902`,
         buttons: ['OK']
       }).then(() => {
         if (mainWindow) {
@@ -288,7 +329,7 @@ if (!gotSingleInstanceLock) {
         writeLog('CRITICAL: Port 5000 is still occupied after termination attempt. Exiting...');
         dialog.showErrorBox(
           "Port Conflict Error",
-          "Port 5000 is already in use by another program and could not be freed. Please close any conflicting applications and try again."
+          "Port 5000 is already in use by another program and could not be freed.\n\nPlease close any conflicting programs or contact support: 9360480902."
         );
         app.quit();
         return;
@@ -307,7 +348,7 @@ if (!gotSingleInstanceLock) {
         hostname: '127.0.0.1',
         port: 5000,
         path: '/api/internal/shutdown',
-        timeout: 1000
+        timeout: 6000
       }, (res) => {
         resolve();
       });
@@ -333,6 +374,7 @@ if (!gotSingleInstanceLock) {
       await shutdownServer();
 
       // Force terminate fallback if the database takes too long to close
+      // 8s safety kill window
       const safetyForceKill = setTimeout(() => {
         if (serverProcess) {
           serverProcess.kill('SIGKILL');
@@ -340,7 +382,7 @@ if (!gotSingleInstanceLock) {
         if (process.platform !== 'darwin') {
           app.quit();
         }
-      }, 1500);
+      }, 8000);
 
       serverProcess.on('exit', () => {
         clearTimeout(safetyForceKill);

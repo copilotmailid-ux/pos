@@ -37,7 +37,17 @@ const getCompleteSale = async (saleId) => {
 // @desc    Create a new sale with full customer billing and internal report tax partitioning
 // @access  Private
 router.post('/', async (req, res) => {
-  const { items, customerMobile, customerName, paymentMethod, amountPaid, changeReturned } = req.body;
+  const {
+    items,
+    customerMobile,
+    customerName,
+    paymentMethod,
+    amountPaid,
+    changeReturned,
+    priceTier = 'Home',
+    quotationId = null,
+    quotationNo = ''
+  } = req.body;
 
   if (!items || items.length === 0) {
     return res.status(400).json({ message: 'No items in the sale' });
@@ -50,8 +60,8 @@ router.post('/', async (req, res) => {
         const existingCustomer = await get(`SELECT id FROM customers WHERE mobile = ?`, [customerMobile.trim()]);
         if (!existingCustomer) {
           await run(
-            `INSERT INTO customers (name, mobile) VALUES (?, ?)`,
-            [customerName.trim(), customerMobile.trim()]
+            `INSERT INTO customers (name, mobile, customerType) VALUES (?, ?, ?)`,
+            [customerName.trim(), customerMobile.trim(), priceTier === 'Shop' ? 'Shop' : 'Home']
           );
         }
       }
@@ -61,6 +71,10 @@ router.post('/', async (req, res) => {
       const newSeq = (counterRow?.seq || 0) + 1;
       await run(`UPDATE counters SET seq = ? WHERE id = 'invoiceNo'`, [newSeq]);
       const invoiceNo = `INV-${String(newSeq).padStart(5, '0')}`;
+
+      // Check store GST settings
+      const storeSettings = await get('SELECT enableGst FROM settings WHERE id = 1');
+      const isGstEnabled = !storeSettings || storeSettings.enableGst !== 0;
 
       // Calculate totals
       let subtotal = 0;
@@ -73,7 +87,7 @@ router.post('/', async (req, res) => {
       const saleItemsData = [];
 
       for (const item of items) {
-        const prodId = item.productId._id || item.productId;
+        const prodId = item.productId._id || item.productId.id || item.productId;
         const product = await get(`SELECT * FROM products WHERE id = ?`, [prodId]);
         if (!product) {
           throw new Error(`Product not found: ${prodId}`);
@@ -99,11 +113,16 @@ router.post('/', async (req, res) => {
           [newGstStock, newNonGstStock, newStock, product.id]
         );
 
-        const itemGstRate = product.gstRate ?? 12;
-        const itemSubtotal = round2(product.sellingPrice * totalQtyNeeded);
+        // Determine price based on priceTier / item price
+        const appliedPrice = item.price !== undefined
+          ? Number(item.price)
+          : (priceTier === 'Shop' ? (product.wholesalePrice || product.sellingPrice) : (product.retailPrice || product.sellingPrice));
 
-        const itemGstSubtotal = round2(product.sellingPrice * allocGst);
-        const itemNonGstSubtotal = round2(product.sellingPrice * allocNonGst);
+        const itemGstRate = isGstEnabled ? Number(item.gstRate !== undefined ? item.gstRate : (product.gstRate || 0)) : 0;
+        const itemSubtotal = round2(appliedPrice * totalQtyNeeded);
+
+        const itemGstSubtotal = round2(appliedPrice * allocGst);
+        const itemNonGstSubtotal = round2(appliedPrice * allocNonGst);
         
         const itemReportGstTax = round2(itemGstSubtotal * (itemGstRate / 100));
         const itemReportNonGstTax = round2(itemNonGstSubtotal * (itemGstRate / 100));
@@ -121,11 +140,13 @@ router.post('/', async (req, res) => {
           productId: product.id,
           productName: product.name,
           variant: product.variant || '',
+          unit: item.unit || product.unit || 'Pcs',
           barcode: product.barcode,
           quantity: totalQtyNeeded,
           gstQuantity: allocGst,
           nonGstQuantity: allocNonGst,
-          price: product.sellingPrice,
+          price: appliedPrice,
+          priceType: item.priceType || priceTier || 'Home',
           purchasePrice: product.purchasePrice || 0,
           gstRate: itemGstRate,
           taxAmount: fullItemTax,
@@ -145,17 +166,65 @@ router.post('/', async (req, res) => {
       // Insert sale (Explicitly insert timezone-aware ISO string for createdAt and updatedAt)
       const nowStr = new Date().toISOString();
       const { id: saleId } = await run(
-        `INSERT INTO sales (invoiceNo, customerMobile, customerName, paymentMethod, amountPaid, changeReturned, subtotal, gstSubtotal, nonGstSubtotal, taxAmount, cgstAmount, sgstAmount, grandTotal, reportGstTax, reportNonGstAmount, status, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [invoiceNo, customerMobile || '', customerName || '', paymentMethod || 'Cash Tendered', finalAmountPaid, finalChangeReturned, subtotal, gstSubtotal, nonGstSubtotal, totalTax, cgstAmount, sgstAmount, grandTotal, reportGstTaxSum, reportNonGstAmountSum, 'Completed', nowStr, nowStr]
+        `INSERT INTO sales (invoiceNo, customerMobile, customerName, paymentMethod, amountPaid, changeReturned, subtotal, gstSubtotal, nonGstSubtotal, taxAmount, cgstAmount, sgstAmount, grandTotal, reportGstTax, reportNonGstAmount, status, priceTier, quotationId, quotationNo, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          invoiceNo,
+          customerMobile || '',
+          customerName || '',
+          paymentMethod || 'Cash Tendered',
+          finalAmountPaid,
+          finalChangeReturned,
+          subtotal,
+          gstSubtotal,
+          nonGstSubtotal,
+          totalTax,
+          cgstAmount,
+          sgstAmount,
+          grandTotal,
+          reportGstTaxSum,
+          reportNonGstAmountSum,
+          'Completed',
+          priceTier || 'Home',
+          quotationId || null,
+          quotationNo || '',
+          nowStr,
+          nowStr
+        ]
       );
 
       // Insert sale items
       for (const si of saleItemsData) {
         await run(
-          `INSERT INTO sale_items (saleId, productId, productName, variant, barcode, quantity, gstQuantity, nonGstQuantity, price, purchasePrice, total, gstRate, taxAmount, reportGstTax, reportNonGstAmount)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [saleId, si.productId, si.productName, si.variant, si.barcode, si.quantity, si.gstQuantity, si.nonGstQuantity, si.price, si.purchasePrice, si.total, si.gstRate, si.taxAmount, si.reportGstTax, si.reportNonGstAmount]
+          `INSERT INTO sale_items (saleId, productId, productName, variant, barcode, quantity, gstQuantity, nonGstQuantity, price, priceType, unit, purchasePrice, total, gstRate, taxAmount, reportGstTax, reportNonGstAmount)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            saleId,
+            si.productId,
+            si.productName,
+            si.variant,
+            si.barcode,
+            si.quantity,
+            si.gstQuantity,
+            si.nonGstQuantity,
+            si.price,
+            si.priceType,
+            si.unit,
+            si.purchasePrice,
+            si.total,
+            si.gstRate,
+            si.taxAmount,
+            si.reportGstTax,
+            si.reportNonGstAmount
+          ]
+        );
+      }
+
+      // 4. If this sale was converted from a Quotation, update the quotation status
+      if (quotationId) {
+        await run(
+          `UPDATE quotations SET status = 'Converted', convertedInvoiceNo = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+          [invoiceNo, quotationId]
         );
       }
 
@@ -341,9 +410,14 @@ router.post('/:id/cancel', async (req, res) => {
   try {
     const { password, savedPassword } = req.body;
 
-    const expectedPassword = savedPassword || process.env.ADMIN_DELETE_PASSWORD || 'admin123';
-    if (password !== expectedPassword) {
-      return res.status(401).json({ message: 'Incorrect Admin Password! Cancellation blocked.' });
+    const settings = await get('SELECT deletePassword, enableDeleteBillPassword FROM settings WHERE id = 1');
+    const isPassRequired = settings ? settings.enableDeleteBillPassword !== 0 : true;
+
+    if (isPassRequired) {
+      const expectedPassword = settings?.deletePassword || savedPassword || process.env.ADMIN_DELETE_PASSWORD || 'admin123';
+      if (password !== expectedPassword) {
+        return res.status(401).json({ message: 'Incorrect Admin Password! Cancellation blocked.' });
+      }
     }
 
     const sale = await get(`SELECT * FROM sales WHERE id = ?`, [req.params.id]);

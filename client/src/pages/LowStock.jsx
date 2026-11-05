@@ -72,7 +72,6 @@ const LowStock = () => {
             <thead>
               <tr>
                 <th>Product</th>
-                <th>Barcode</th>
                 <th>Category</th>
                 <th>Selling Price</th>
                 <th>Stock</th>
@@ -82,10 +81,10 @@ const LowStock = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="6" className="table-loading"><div className="spinner"></div></td></tr>
+                <tr><td colSpan="5" className="table-loading"><div className="spinner"></div></td></tr>
               ) : products.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="table-empty">
+                  <td colSpan="5" className="table-empty">
                     <div style={{ color: 'var(--green-500)', marginBottom: 8, fontSize: 24 }}>✅</div>
                     <p className="font-medium">All products are well stocked!</p>
                   </td>
@@ -96,7 +95,6 @@ const LowStock = () => {
                   return (
                     <tr key={p._id}>
                       <td className="font-medium">{p.name}</td>
-                      <td><span className="mono-tag">{p.barcode}</span></td>
                       <td><span className="badge badge--brand">{p.category}</span></td>
                       <td style={{ color: 'var(--slate-600)', fontSize: 14 }}>₹{p.sellingPrice.toFixed(2)}</td>
                       <td>

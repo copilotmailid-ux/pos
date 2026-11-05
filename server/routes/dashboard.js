@@ -148,6 +148,10 @@ router.get('/', async (req, res) => {
       recentSales.push(populated);
     }
 
+    // 6. Pending quotations count
+    const pendingQtnRow = await get(`SELECT COUNT(*) as count FROM quotations WHERE status = 'Draft'`);
+    const pendingQuotationsCount = pendingQtnRow?.count || 0;
+
     res.json({
       totalProducts,
       totalStock,
@@ -156,6 +160,7 @@ router.get('/', async (req, res) => {
       todayProfit,
       todayNonGstTaxProfit,
       lowStockCount,
+      pendingQuotationsCount,
       recentSales,
       page,
       totalPages: totalPagesOnDay,

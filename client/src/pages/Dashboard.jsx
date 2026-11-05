@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import {
   HiOutlineCube,
@@ -8,6 +9,7 @@ import {
   HiOutlineTrendingUp,
   HiOutlineChevronLeft,
   HiOutlineChevronRight,
+  HiOutlineDocumentText
 } from 'react-icons/hi';
 
 const getLocalDateString = () => {
@@ -19,6 +21,7 @@ const getLocalDateString = () => {
 };
 
 const Dashboard = () => {
+  const navigate = useNavigate();
   const [stats, setStats] = useState(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [filtering, setFiltering] = useState(false);
@@ -91,11 +94,12 @@ const Dashboard = () => {
       colorKey: 'green',
     },
     {
-      title: isToday ? "Today's Non-GST Profit" : "Non-GST Profit (Chosen Day)",
-      value: `₹${(stats?.todayNonGstTaxProfit || 0).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })}`,
-      subtitle: 'Retained tax income',
-      icon: HiOutlineCurrencyRupee,
-      colorKey: 'blue',
+      title: 'Active Quotations',
+      value: stats?.pendingQuotationsCount || 0,
+      subtitle: 'Click to view & convert',
+      icon: HiOutlineDocumentText,
+      colorKey: 'violet',
+      link: '/quotations'
     },
     {
       title: 'Total Products',
@@ -163,7 +167,12 @@ const Dashboard = () => {
 
       <div className="stats-grid" style={{ opacity: filtering ? 0.6 : 1, transition: 'opacity 0.2s ease' }}>
         {statCards.map((card, idx) => (
-          <div key={idx} className="stat-card">
+          <div 
+            key={idx} 
+            className="stat-card"
+            onClick={card.link ? () => navigate(card.link) : undefined}
+            style={{ cursor: card.link ? 'pointer' : 'default' }}
+          >
             <div className="stat-card-body">
               <div>
                 <p className="stat-card-label">{card.title}</p>

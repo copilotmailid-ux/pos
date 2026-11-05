@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { initializeDB, backupDatabase, db, get } = require('./config/db');
+const { initBackupConfig, syncToGoogleDriveSync, syncToGoogleDriveAsync } = require('./config/cloudBackup');
 
 // Crash protection: Exit Node on critical errors so Electron auto-healing can spawn a clean process
 process.on('uncaughtException', (err) => {
@@ -42,13 +43,19 @@ if (fs.existsSync(externalEnvPath)) {
 
 // Connect and initialize database
 initializeDB()
-  .then(() => {
+  .then(async () => {
     console.log(`${colors.green}✔ [DB]${colors.reset}      Database connected & schema initialized`);
-    // Trigger startup database backup after 10 seconds to ensure launch is instant and unblocked
+    await initBackupConfig();
+    // Trigger startup database backup & Google Drive sync
     setTimeout(() => {
-      backupDatabase()
+      syncToGoogleDriveAsync('SERVER_STARTUP')
         .catch((err) => console.error(`${colors.red}✖ [BACKUP]${colors.reset}  Startup database backup failed: ${err.message}`));
-    }, 10000);
+    }, 1500);
+    // Periodic auto-backup to Google Drive every 15 minutes
+    setInterval(() => {
+      syncToGoogleDriveAsync('AUTO_15MIN')
+        .catch((err) => console.error(`${colors.red}✖ [BACKUP]${colors.reset}  Periodic backup failed: ${err.message}`));
+    }, 15 * 60 * 1000);
   })
   .catch((err) => {
     console.error(`${colors.red}✖ [DB]${colors.reset}      SQLite Database Initialization Error:`, err);
@@ -57,9 +64,19 @@ initializeDB()
 
 const app = express();
 
+// Ensure uploads/products directory exists for local image storage
+const uploadsDir = path.join(__dirname, 'uploads', 'products');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// Serve local product images statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
@@ -71,87 +88,63 @@ app.use('/api/suppliers', require('./routes/suppliers'));
 app.use('/api/purchases', require('./routes/purchases'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/quotations', require('./routes/quotations'));
 
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Shutdown endpoint called by Electron on exit to close SQLite connection and flush WAL cleanly on Windows
-app.post('/api/internal/shutdown', async (req, res) => {
-  res.json({ message: 'Shutting down...' });
-  console.log(`${colors.yellow}🛑 [SHUTDOWN]${colors.reset} Commencing graceful cleanup...`);
 
-  let backupPath = '';
-  let backupRetention = 5;
-  
+let isShuttingDown = false;
+
+const performGracefulShutdownAndBackup = (source = 'TERMINAL') => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`\n${colors.yellow}🛑 [SHUTDOWN]${colors.reset} Commencing shutdown (Triggered by: ${colors.bold}${source}${colors.reset})...`);
+
+  // 1. Ultra-fast synchronous copy to Google Drive & local backup (completes in ~15ms before Windows can terminate Node)
   try {
-    const settings = await get('SELECT backupPath, backupRetention FROM settings WHERE id = 1');
-    if (settings) {
-      backupPath = settings.backupPath;
-      backupRetention = settings.backupRetention || 5;
-    }
+    syncToGoogleDriveSync(source);
   } catch (err) {
-    console.error(`${colors.red}✖ [SHUTDOWN]${colors.reset} Failed to read settings: ${err.message}`);
+    console.error(`${colors.red}✖ [SHUTDOWN BACKUP]${colors.reset} Error: ${err.message}`);
   }
 
-  db.close((err) => {
-    if (err) {
-      console.error(`${colors.red}✖ [SHUTDOWN]${colors.reset} Error closing SQLite database: ${err.message}`);
-    } else {
-      console.log(`${colors.green}✔ [SHUTDOWN]${colors.reset} SQLite database connection closed cleanly`);
-
-      if (backupPath) {
-        try {
-          const fs = require('fs');
-          const path = require('path');
-          
-          if (!fs.existsSync(backupPath)) {
-            fs.mkdirSync(backupPath, { recursive: true });
-          }
-
-          const liveDbFile = process.env.SQLITE_DB_PATH || path.join(__dirname, 'database.sqlite');
-          if (fs.existsSync(liveDbFile)) {
-            // Copy 1: Overwrite static latest copy
-            const latestBackup = path.join(backupPath, 'database.sqlite');
-            fs.copyFileSync(liveDbFile, latestBackup);
-
-            // Copy 2: Save timestamped incremental backup file using local timezone
-            const now = new Date();
-            const localTimestamp = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
-              .toISOString()
-              .replace(/Z$/, '')
-              .replace(/[:.]/g, '-');
-            const timestampedBackup = path.join(backupPath, `backup_${localTimestamp}.sqlite`);
-            fs.copyFileSync(liveDbFile, timestampedBackup);
-
-            console.log(`${colors.green}📦 [BACKUP]${colors.reset}  Database saved to: ${colors.dim}${backupPath}${colors.reset}`);
-
-            // Clean up old timestamped backups to enforce retention limit
-            const files = fs.readdirSync(backupPath)
-              .filter(f => f.startsWith('backup_') && f.endsWith('.sqlite'))
-              .map(f => ({
-                name: f,
-                path: path.join(backupPath, f),
-                time: fs.statSync(path.join(backupPath, f)).mtime.getTime()
-              }))
-              .sort((a, b) => b.time - a.time); // Newest first
-
-            if (files.length > backupRetention) {
-              const extraFiles = files.slice(backupRetention);
-              for (const file of extraFiles) {
-                fs.unlinkSync(file.path);
-                console.log(`${colors.yellow}🧹 [CLEANUP]${colors.reset} Deleted old backup: ${colors.dim}${file.name}${colors.reset}`);
-              }
-            }
-          }
-        } catch (backupErr) {
-          console.error(`${colors.red}✖ [BACKUP]${colors.reset}  Automatic shutdown backup failed: ${backupErr.message}`);
-        }
+  // 2. Safely close SQLite DB connection
+  try {
+    db.close((err) => {
+      if (!err) {
+        console.log(`${colors.green}✔ [SHUTDOWN]${colors.reset} SQLite database connection closed cleanly`);
       }
-    }
-    process.exit(0);
-  });
+    });
+  } catch (_) {}
+
+  // 3. Stop express server
+  if (server) {
+    try { server.close(); } catch (_) {}
+  }
+
+  console.log(`${colors.green}✔ [SHUTDOWN]${colors.reset} All shutdown tasks completed. Goodbye!\n`);
+  process.exit(0);
+};
+
+// Shutdown endpoint called by Electron on exit to close SQLite connection and flush WAL cleanly on Windows
+app.post('/api/internal/shutdown', (req, res) => {
+  try {
+    console.log(`\n${colors.yellow}🛑 [SHUTDOWN]${colors.reset} Electron initiated shutdown. Performing backup...`);
+    syncToGoogleDriveSync('ELECTRON_SHUTDOWN');
+    res.json({ success: true, message: 'Shutdown backup completed cleanly.' });
+  } catch (err) {
+    console.error('Shutdown backup error:', err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    setTimeout(() => {
+      try { db.close(); } catch (_) {}
+      if (server) { try { server.close(); } catch (_) {} }
+      process.exit(0);
+    }, 150);
+  }
 });
 
 // Serve frontend static build files
@@ -242,7 +235,7 @@ function killProcessOnPort(port) {
 }
 
 const startListening = () => {
-  server = app.listen(PORT, () => {
+  server = app.listen(PORT, '127.0.0.1', () => {
     console.log(`
 ${colors.cyan}┌────────────────────────────────────────────────────────┐${colors.reset}
 ${colors.cyan}│${colors.reset}                                                        ${colors.cyan}│${colors.reset}
@@ -269,25 +262,28 @@ checkPort(PORT, '127.0.0.1', async (inUse) => {
   startListening();
 });
 
-const gracefulShutdown = () => {
-  console.log(`\n${colors.yellow}🛑 [SHUTDOWN]${colors.reset} Shutting down server gracefully...`);
-  db.close((err) => {
-    if (err) {
-      console.error(`${colors.red}✖ [SHUTDOWN]${colors.reset} Error closing SQLite database: ${err.message}`);
-    } else {
-      console.log(`${colors.green}✔ [SHUTDOWN]${colors.reset} SQLite database connection closed cleanly`);
-    }
-    if (server) {
-      server.close(() => {
-        console.log(`${colors.green}✔ [SHUTDOWN]${colors.reset} Express server stopped cleanly`);
-        process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
-    setTimeout(() => process.exit(0), 500);
-  });
-};
+if (process.platform === 'win32' && process.stdin && process.stdin.isTTY) {
+  try {
+    const readline = require('readline');
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    rl.on('SIGINT', () => {
+      performGracefulShutdownAndBackup('TERMINAL_CTRL_C');
+    });
+  } catch (_) {}
+}
 
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', () => performGracefulShutdownAndBackup('TERMINAL_CTRL_C'));
+process.on('SIGTERM', () => performGracefulShutdownAndBackup('TERMINAL_SIGTERM'));
+process.once('SIGUSR2', async () => {
+  await performGracefulShutdownAndBackup('NODEMON_RESTART');
+  process.kill(process.pid, 'SIGUSR2');
+});
+
+process.on('exit', () => {
+  if (!isShuttingDown) {
+    try { syncToGoogleDriveSync('PROCESS_EXIT'); } catch (_) {}
+  }
+});

@@ -20,15 +20,31 @@ const emptyForm = {
   variant: '',
   barcode: '',
   category: '',
+  unit: 'Pcs',
   purchasePrice: '',
   sellingPrice: '',
+  retailPrice: '',
+  wholesalePrice: '',
+  minWholesaleQty: 1,
+  stock: '',
   gstStock: '',
   nonGstStock: '',
-  gstRate: 12
+  gstRate: 0
 };
 
-const categories = ['Dairy', 'Beverages', 'Snacks', 'Grocery', 'Personal Care', 'Household', 'Other'];
-const gstSlabs = [0, 5, 12, 18, 28];
+const categories = [
+  'Flour & Mixes',
+  'Chocolates & Cocoa',
+  'Dairy & Fats',
+  'Fillings & Glazes',
+  'Colors & Flavors',
+  'Decorations & Sprinkles',
+  'Packaging & Boxes',
+  'Tools & Moulds',
+  'Bakery Raw Materials',
+  'Other'
+];
+const unitsList = ['Kg', 'Gm', 'Pcs', 'Box', 'Bag', 'Liter', 'Pack', 'Tub', 'Tin', 'Bucket'];
 
 const Products = () => {
   const [products, setProducts] = useState([]);
@@ -39,6 +55,14 @@ const Products = () => {
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [enableGst, setEnableGst] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pos_enable_gst');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
 
   // Pagination states
   const [page, setPage] = useState(1);
@@ -47,27 +71,50 @@ const Products = () => {
 
   // Password Protection States
   const [deleteInputPassword, setDeleteInputPassword] = useState('');
+  const [enableDeleteProductPassword, setEnableDeleteProductPassword] = useState(true);
   // Settings tab is now managed globally under Ctrl + Shift + S
 
   const searchTimeoutRef = useRef(null);
-  const barcodeInputRef = useRef(null);
   const nameInputRef = useRef(null);
 
   useEffect(() => {
     fetchProducts('', 1);
+    fetchSettings();
+
+    const handleSettingsUpdate = () => {
+      fetchSettings();
+    };
+    window.addEventListener('pos_settings_updated', handleSettingsUpdate);
     return () => {
+      window.removeEventListener('pos_settings_updated', handleSettingsUpdate);
       if (searchTimeoutRef.current) {
         clearTimeout(searchTimeoutRef.current);
       }
     };
   }, []);
 
-  // Autofocus barcode input when modal opens
+  const fetchSettings = async () => {
+    try {
+      const { data } = await api.get('/settings');
+      if (data) {
+        const isGst = data.enableGst !== false;
+        setEnableGst(isGst);
+        localStorage.setItem('pos_enable_gst', String(isGst));
+        if (data.enableDeleteProductPassword !== undefined) {
+          setEnableDeleteProductPassword(data.enableDeleteProductPassword !== false);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load settings in Products', err);
+    }
+  };
+
+  // Autofocus name input when modal opens
   useEffect(() => {
     if (modalOpen) {
       const timer = setTimeout(() => {
-        if (barcodeInputRef.current) {
-          barcodeInputRef.current.focus();
+        if (nameInputRef.current) {
+          nameInputRef.current.focus();
         }
       }, 80);
       return () => clearTimeout(timer);
@@ -105,16 +152,24 @@ const Products = () => {
   const openAdd = () => { setEditId(null); setForm(emptyForm); setModalOpen(true); document.body.classList.add('modal-open'); };
   const openEdit = (p) => {
     setEditId(p._id);
+    const rPrice = p.retailPrice ?? p.sellingPrice ?? '';
+    const wPrice = p.wholesalePrice ?? p.sellingPrice ?? '';
+    const currentStock = p.stock ?? ((p.gstStock || 0) + (p.nonGstStock || 0));
     setForm({ 
       name: p.name, 
       variant: p.variant || '',
-      barcode: p.barcode, 
+      barcode: p.barcode || '', 
       category: p.category, 
+      unit: p.unit || 'Pcs',
       purchasePrice: p.purchasePrice, 
-      sellingPrice: p.sellingPrice, 
-      gstStock: p.gstStock ?? p.stock,
-      nonGstStock: p.nonGstStock ?? 0,
-      gstRate: p.gstRate ?? 12 
+      sellingPrice: rPrice, 
+      retailPrice: rPrice,
+      wholesalePrice: wPrice,
+      minWholesaleQty: p.minWholesaleQty ?? 1,
+      stock: currentStock,
+      gstStock: currentStock,
+      nonGstStock: 0,
+      gstRate: p.gstRate !== undefined ? p.gstRate : 0
     });
     setModalOpen(true);
     document.body.classList.add('modal-open');
@@ -123,22 +178,29 @@ const Products = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.name || !form.category || form.purchasePrice === '' || form.sellingPrice === '') {
+    if (!form.name || !form.category || form.purchasePrice === '' || (form.sellingPrice === '' && form.retailPrice === '')) {
       toast.error('Please fill all required fields'); return;
     }
     setSaving(true);
     try {
+      const effRetail = Number(form.retailPrice || form.sellingPrice || 0);
+      const effWholesale = Number(form.wholesalePrice || effRetail);
+      const totalStock = Number(form.stock !== '' ? form.stock : (form.gstStock || 0));
       const payload = {
         name: form.name,
         variant: form.variant,
         barcode: form.barcode || undefined,
         category: form.category,
+        unit: form.unit || 'Pcs',
         purchasePrice: Number(form.purchasePrice),
-        sellingPrice: Number(form.sellingPrice),
-        gstStock: Number(form.gstStock || 0),
-        nonGstStock: Number(form.nonGstStock || 0),
-        stock: Number(form.gstStock || 0) + Number(form.nonGstStock || 0),
-        gstRate: Number(form.gstRate)
+        sellingPrice: effRetail,
+        retailPrice: effRetail,
+        wholesalePrice: effWholesale,
+        minWholesaleQty: Number(form.minWholesaleQty || 1),
+        gstStock: totalStock,
+        nonGstStock: 0,
+        stock: totalStock,
+        gstRate: enableGst ? Number(form.gstRate || 0) : 0
       };
 
       if (editId) {
@@ -163,18 +225,20 @@ const Products = () => {
 
   const handleDelete = async (e) => {
     e.preventDefault();
-    if (!deleteInputPassword) {
-      toast.error('Admin password is required to delete product!');
-      return;
-    }
+    if (enableDeleteProductPassword) {
+      if (!deleteInputPassword) {
+        toast.error('Admin password is required to delete product!');
+        return;
+      }
 
-    try {
       const savedPassword = localStorage.getItem('pos_admin_delete_pass') || 'admin123';
       if (deleteInputPassword !== savedPassword) {
         toast.error('Incorrect Admin Password! Delete authorization rejected.');
         return;
       }
+    }
 
+    try {
       await api.delete(`/products/${deleteModal._id}`);
       toast.success('Product deleted successfully');
       closeDeleteModal();
@@ -211,7 +275,7 @@ const Products = () => {
           <input
             type="text"
             className="search-input"
-            placeholder="Search by product name, barcode, or category..."
+            placeholder="Search by product name or category..."
             value={search}
             onChange={handleSearch}
             style={{ border: 'none', background: 'transparent', height: '100%', width: '100%', outline: 'none', fontSize: 14 }}
@@ -223,50 +287,82 @@ const Products = () => {
             <table className="data-table data-table--bordered">
               <thead>
                 <tr>
-                  <th>Product</th>
-                  <th>Barcode</th>
+                  <th>Product & Variant</th>
                   <th>Category</th>
-                  <th>Purchase Price</th>
-                  <th>Selling Price</th>
-                  <th className="text-center">GST Rate</th>
-                  <th className="text-center">GST Stock (A)</th>
-                  <th className="text-center">Non-GST Stock (B)</th>
+                  <th>Unit</th>
+                  <th>Purchase</th>
+                  <th>Home / Retail</th>
+                  <th>Shop / Wholesale</th>
+                  {enableGst && <th className="text-center" style={{ width: 95 }}>GST Rate</th>}
                   <th className="text-center">Total Stock</th>
                   <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>Loading products...</td></tr>
+                  <tr><td colSpan={enableGst ? 9 : 8} style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>Loading products...</td></tr>
                 ) : products.length === 0 ? (
-                  <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>No products found</td></tr>
+                  <tr><td colSpan={enableGst ? 9 : 8} style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate-400)' }}>No products found</td></tr>
                 ) : (
-                  products.map((p) => (
-                    <tr key={p._id}>
-                      <td>
-                        <div style={{ fontWeight: 600, color: 'var(--slate-800)' }}>{p.name}</div>
-                        {p.variant && <div style={{ fontSize: 11, color: 'var(--slate-450)', marginTop: 2 }}>{p.variant}</div>}
-                      </td>
-                      <td className="font-mono" style={{ fontSize: 12, color: 'var(--slate-500)' }}>{p.barcode}</td>
-                      <td><span className="badge badge--brand">{p.category}</span></td>
-                      <td style={{ color: 'var(--slate-600)' }}>₹{p.purchasePrice.toFixed(2)}</td>
-                      <td className="font-medium">₹{p.sellingPrice.toFixed(2)}</td>
-                      <td className="text-center" style={{ color: 'var(--slate-650)' }}>{p.gstRate ?? 12}%</td>
-                      <td className="text-center" style={{ fontWeight: 600, color: '#16a34a' }}>{p.gstStock || 0}</td>
-                      <td className="text-center" style={{ fontWeight: 600, color: '#d97706' }}>{p.nonGstStock || 0}</td>
-                      <td className="text-center"><span className={getStockClass(p.stock)}>{p.stock}</span></td>
-                      <td className="text-right">
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-                          <button onClick={() => openEdit(p)} className="btn--icon" title="Edit">
-                            <HiOutlinePencil />
-                          </button>
-                          <button onClick={() => { setDeleteModal(p); document.body.classList.add('modal-open'); }} className="btn--icon btn--icon-danger" title="Delete">
-                            <HiOutlineTrash />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  products.map((p) => {
+                    const rPrice = p.retailPrice ?? p.sellingPrice ?? 0;
+                    const wPrice = p.wholesalePrice ?? p.sellingPrice ?? 0;
+                    return (
+                      <tr key={p._id}>
+                        <td>
+                          <div>
+                            <div style={{ fontWeight: 600, color: 'var(--slate-800)', fontSize: 13.5 }}>{p.name}</div>
+                            {p.variant && <div style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 2 }}>{p.variant}</div>}
+                          </div>
+                        </td>
+                        <td><span className="badge badge--brand">{p.category}</span></td>
+                        <td><span className="badge" style={{ background: '#f1f5f9', color: '#475569', fontWeight: 600 }}>{p.unit || 'Pcs'}</span></td>
+                        <td style={{ color: 'var(--slate-600)' }}>₹{p.purchasePrice ? p.purchasePrice.toFixed(2) : '0.00'}</td>
+                        <td>
+                          <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                            ₹{rPrice.toFixed(2)}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontWeight: 600, color: '#7c3aed' }}>
+                            ₹{wPrice.toFixed(2)}
+                          </span>
+                          {p.minWholesaleQty > 1 && (
+                            <div style={{ fontSize: 10, color: '#6d28d9' }}>Min: {p.minWholesaleQty} {p.unit || 'Pcs'}</div>
+                          )}
+                        </td>
+                        {enableGst && (
+                          <td className="text-center">
+                            <span className="badge" style={{
+                              background: (p.gstRate > 0) ? '#ecfdf5' : '#f8fafc',
+                              color: (p.gstRate > 0) ? '#047857' : '#64748b',
+                              border: `1px solid ${(p.gstRate > 0) ? '#a7f3d0' : '#e2e8f0'}`,
+                              fontWeight: 700,
+                              padding: '4px 8px',
+                              borderRadius: 6
+                            }}>
+                              {p.gstRate ?? 0}%
+                            </span>
+                          </td>
+                        )}
+                        <td className="text-center">
+                          <span className={getStockClass(p.stock)}>
+                            {p.stock} {p.unit || 'Pcs'}
+                          </span>
+                        </td>
+                        <td className="text-right">
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+                            <button onClick={() => openEdit(p)} className="btn--icon" title="Edit">
+                              <HiOutlinePencil />
+                            </button>
+                            <button onClick={() => { setDeleteModal(p); document.body.classList.add('modal-open'); }} className="btn--icon btn--icon-danger" title="Delete">
+                              <HiOutlineTrash />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -293,29 +389,10 @@ const Products = () => {
           <div className="modal-backdrop" onClick={closeModal} />
           <div className="modal modal--lg">
             <div className="modal-header">
-              <h3>{editId ? 'Edit Product' : 'Add New Product'}</h3>
+              <h3>{editId ? 'Edit Bakery Product' : 'Add Wholesale / Retail Product'}</h3>
               <button onClick={closeModal} className="close-btn"><HiOutlineX /></button>
             </div>
             <form onSubmit={handleSubmit} className="modal-body">
-              <div className="form-group">
-                <label>Barcode <span className="hint">(auto-generated if empty)</span></label>
-                <input 
-                  type="text" 
-                  ref={barcodeInputRef} 
-                  className="form-input form-input--mono" 
-                  value={form.barcode} 
-                  onChange={(e) => setForm({ ...form, barcode: e.target.value })} 
-                  placeholder="Scan or type barcode (Focus here to scan)" 
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      if (nameInputRef.current) {
-                        nameInputRef.current.focus();
-                      }
-                    }
-                  }}
-                />
-              </div>
               <div className="form-group">
                 <label>Product Name <span className="required">*</span></label>
                 <input 
@@ -324,50 +401,111 @@ const Products = () => {
                   className="form-input" 
                   value={form.name} 
                   onChange={(e) => setForm({ ...form, name: e.target.value })} 
-                  placeholder="e.g., Dabur Red Paste" 
+                  placeholder="e.g., Maida Superior Baking Grade" 
+                  required
                 />
               </div>
-              <div className="form-group">
-                <label>Size / Variant <span className="hint">(e.g., 50g, 10 Rs, 1L)</span></label>
-                <input type="text" className="form-input" value={form.variant} onChange={(e) => setForm({ ...form, variant: e.target.value })} placeholder="e.g., 50g, 10 Rs" />
-              </div>
-              <div className="form-group">
-                <label>Category <span className="required">*</span></label>
-                <select className="form-select" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                  <option value="">Select category</option>
-                  {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
               <div className="form-row">
-                <div className="form-group">
-                  <label>Purchase ₹ <span className="required">*</span></label>
-                  <input type="number" min="0" step="0.01" className="form-input" value={form.purchasePrice} onChange={(e) => setForm({ ...form, purchasePrice: e.target.value })} placeholder="0" />
+                <div className="form-group" style={{ flex: 1.5 }}>
+                  <label>Category <span className="required">*</span></label>
+                  <select className="form-select" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required>
+                    <option value="">Select category</option>
+                    {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </div>
-                <div className="form-group">
-                  <label>Selling ₹ <span className="required">*</span></label>
-                  <input type="number" min="0" step="0.01" className="form-input" value={form.sellingPrice} onChange={(e) => setForm({ ...form, sellingPrice: e.target.value })} placeholder="0" />
-                </div>
-                <div className="form-group">
-                  <label>GST Slab (%)</label>
-                  <select className="form-select" value={form.gstRate} onChange={(e) => setForm({ ...form, gstRate: Number(e.target.value) })}>
-                    {gstSlabs.map((rate) => <option key={rate} value={rate}>{rate}% GST</option>)}
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Unit of Measure (UOM) <span className="required">*</span></label>
+                  <select className="form-select" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}>
+                    {unitsList.map((u) => <option key={u} value={u}>{u}</option>)}
                   </select>
                 </div>
               </div>
+              <div className="form-group">
+                <label>Size / Variant <span className="hint">(e.g., 500g, 1kg, 50kg Bag)</span></label>
+                <input type="text" className="form-input" value={form.variant} onChange={(e) => setForm({ ...form, variant: e.target.value })} placeholder="e.g., 50kg Bag" />
+              </div>
               
-              <div className="form-row" style={{ marginTop: 12, padding: 12, background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-                <div className="form-group">
-                  <label style={{ color: '#16a34a', fontWeight: 650 }}>GST Stock (Supplier A)</label>
-                  <input type="number" min="0" className="form-input" value={form.gstStock} onChange={(e) => setForm({ ...form, gstStock: e.target.value })} placeholder="0" />
+              {/* GST Rate Section (if GST enabled) */}
+              {enableGst && (
+                <div style={{ background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 8, padding: 14, marginBottom: 14 }}>
+                  <label style={{ fontWeight: 650, color: '#166534', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, fontSize: 13 }}>
+                    <span>🏷️ Applicable GST Rate (%)</span>
+                    <span style={{ fontSize: 11, fontWeight: 400, color: '#15803d' }}>(Select slab or enter custom rate)</span>
+                  </label>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <select
+                      className="form-select"
+                      style={{ width: 150, background: '#fff', fontWeight: 600 }}
+                      value={[0, 5, 12, 18, 28].includes(Number(form.gstRate)) ? Number(form.gstRate) : 'custom'}
+                      onChange={(e) => {
+                        if (e.target.value !== 'custom') {
+                          setForm({ ...form, gstRate: Number(e.target.value) });
+                        }
+                      }}
+                    >
+                      <option value={0}>0% (Exempt)</option>
+                      <option value={5}>5% GST</option>
+                      <option value={12}>12% GST</option>
+                      <option value={18}>18% GST</option>
+                      <option value={28}>28% GST</option>
+                      <option value="custom">Custom Rate...</option>
+                    </select>
+                    <div style={{ position: 'relative', flex: 1 }}>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        className="form-input"
+                        placeholder="e.g. 18"
+                        value={form.gstRate}
+                        onChange={(e) => setForm({ ...form, gstRate: e.target.value })}
+                        style={{ width: '100%', background: '#fff' }}
+                      />
+                      <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', fontWeight: 700, color: '#64748b', fontSize: 13, pointerEvents: 'none' }}>%</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label style={{ color: '#d97706', fontWeight: 650 }}>Non-GST Stock (Supplier B)</label>
-                  <input type="number" min="0" className="form-input" value={form.nonGstStock} onChange={(e) => setForm({ ...form, nonGstStock: e.target.value })} placeholder="0" />
+              )}
+
+              {/* Dual Pricing Section */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 14, marginTop: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>💰 Pricing Tiers & Purchase Cost</span>
                 </div>
-                <div className="form-group">
-                  <label style={{ fontWeight: 650 }}>Total Stock</label>
-                  <input type="number" className="form-input" value={(Number(form.gstStock || 0) + Number(form.nonGstStock || 0))} disabled style={{ background: '#f1f5f9' }} />
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Purchase Cost ₹ <span className="required">*</span></label>
+                    <input type="number" min="0" step="0.01" className="form-input" value={form.purchasePrice} onChange={(e) => setForm({ ...form, purchasePrice: e.target.value })} placeholder="0.00" required />
+                  </div>
+                  <div className="form-group">
+                    <label style={{ color: '#0369a1', fontWeight: 600 }}>🏠 Home / Retail ₹ <span className="required">*</span></label>
+                    <input type="number" min="0" step="0.01" className="form-input" value={form.retailPrice} onChange={(e) => setForm({ ...form, retailPrice: e.target.value, sellingPrice: e.target.value })} placeholder="0.00" required />
+                  </div>
+                  <div className="form-group">
+                    <label style={{ color: '#7c3aed', fontWeight: 600 }}>🏢 Shop / Wholesale ₹ <span className="required">*</span></label>
+                    <input type="number" min="0" step="0.01" className="form-input" value={form.wholesalePrice} onChange={(e) => setForm({ ...form, wholesalePrice: e.target.value })} placeholder="0.00" required />
+                  </div>
+                  <div className="form-group" style={{ maxWidth: 120 }}>
+                    <label>Min Shop Qty</label>
+                    <input type="number" min="1" step="1" className="form-input" value={form.minWholesaleQty} onChange={(e) => setForm({ ...form, minWholesaleQty: e.target.value })} placeholder="1" />
+                  </div>
                 </div>
+              </div>
+              
+              <div className="form-group" style={{ marginTop: 14 }}>
+                <label style={{ fontWeight: 650, color: '#334155' }}>
+                  Available Stock Quantity ({form.unit || 'Pcs'}) <span className="required">*</span>
+                </label>
+                <input 
+                  type="number" 
+                  min="0" 
+                  className="form-input" 
+                  value={form.stock} 
+                  onChange={(e) => setForm({ ...form, stock: e.target.value, gstStock: e.target.value, nonGstStock: 0 })} 
+                  placeholder="0" 
+                  required 
+                />
               </div>
 
               <div className="form-actions" style={{ marginTop: 20 }}>
@@ -400,23 +538,38 @@ const Products = () => {
                   Are you sure you want to delete <strong>{deleteModal.name}</strong>? This action cannot be undone.
                 </p>
               </div>
-              <div className="form-group" style={{ borderTop: '1px solid #f1f5f9', paddingTop: 16 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <HiOutlineLockClosed /> Enter Delete-Protection Admin Password
-                </label>
-                <input
-                  type="password"
-                  value={deleteInputPassword}
-                  onChange={(e) => setDeleteInputPassword(e.target.value)}
-                  className="form-input"
-                  placeholder="Enter admin password (Default: admin123)"
-                  required
-                  autoFocus
-                />
-              </div>
+              {enableDeleteProductPassword ? (
+                <div className="form-group" style={{ borderTop: '1px solid #f1f5f9', paddingTop: 16 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <HiOutlineLockClosed /> Enter Delete-Protection Admin Password
+                  </label>
+                  <input
+                    type="password"
+                    value={deleteInputPassword}
+                    onChange={(e) => setDeleteInputPassword(e.target.value)}
+                    className="form-input"
+                    placeholder="Enter admin password (Default: admin123)"
+                    required
+                    autoFocus
+                  />
+                </div>
+              ) : (
+                <div style={{
+                  background: '#ecfdf5',
+                  border: '1px solid #a7f3d0',
+                  borderRadius: 6,
+                  padding: '10px 14px',
+                  color: '#065f46',
+                  fontSize: 12.5,
+                  textAlign: 'center',
+                  marginTop: 12
+                }}>
+                  ⚡ Password check is disabled in Settings. Click below to delete.
+                </div>
+              )}
               <div className="form-actions" style={{ marginTop: 20 }}>
                 <button type="button" onClick={closeDeleteModal} className="btn btn--ghost">Cancel</button>
-                <button type="submit" className="btn btn--danger">Authenticate & Delete</button>
+                <button type="submit" className="btn btn--danger">{enableDeleteProductPassword ? 'Authenticate & Delete' : 'Confirm Delete'}</button>
               </div>
             </form>
           </div>

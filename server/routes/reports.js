@@ -64,30 +64,41 @@ const getPopulatedPurchases = async (conditions, params) => {
   }
   sql += ` ORDER BY p.id ASC`;
   const rows = await all(sql, params);
-  return rows.map(row => ({
-    _id: row.id,
-    id: row.id,
-    purchaseNumber: row.purchaseNumber,
-    purchaseTaxType: row.purchaseTaxType,
-    subtotal: row.subtotal,
-    tax: row.tax,
-    total: row.total,
-    paymentMethod: row.paymentMethod,
-    status: row.status,
-    notes: row.notes,
-    invoiceDate: row.invoiceDate,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    supplier: {
-      _id: row.supplierId,
-      id: row.supplierId,
-      name: row.supplierName || 'Unknown Supplier',
-      phone: row.supplierPhone || '',
-      contactPerson: row.supplierContact || '',
-      supplierType: row.supplierType || 'GST',
-      gstin: row.supplierGstin || ''
-    }
-  }));
+  return rows.map(row => {
+    const isCredit = row.paymentMethod === 'Credit';
+    const paymentStatus = row.paymentStatus || (isCredit ? 'Pending' : 'Paid');
+    const paidAmount = Number(row.paidAmount !== null && row.paidAmount !== undefined ? row.paidAmount : (isCredit ? 0 : row.total));
+    const dueAmount = Math.max(0, Math.round(((Number(row.total) || 0) - paidAmount) * 100) / 100);
+
+    return {
+      _id: row.id,
+      id: row.id,
+      purchaseNumber: row.purchaseNumber,
+      purchaseTaxType: row.purchaseTaxType,
+      subtotal: row.subtotal,
+      tax: row.tax,
+      total: row.total,
+      paymentMethod: row.paymentMethod,
+      paymentStatus,
+      paidAmount,
+      dueAmount,
+      paidAt: row.paidAt,
+      status: row.status,
+      notes: row.notes,
+      invoiceDate: row.invoiceDate,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      supplier: {
+        _id: row.supplierId,
+        id: row.supplierId,
+        name: row.supplierName || 'Walk-in / Cash Supplier',
+        phone: row.supplierPhone || '',
+        contactPerson: row.supplierContact || '',
+        supplierType: row.supplierType || (row.purchaseTaxType || 'Non-GST'),
+        gstin: row.supplierGstin || ''
+      }
+    };
+  });
 };
 
 const getIsoStringFromLocal = (dateStr, timeStr) => {
@@ -117,13 +128,22 @@ const addDateConditions = (conditions, params, startDate, endDate, dateField) =>
   }
 };
 
-// 1. Sales Report Endpoint (All Sales)
+// 1. Sales Report Endpoint (All Sales & Tier-Filtered)
 router.get('/sales', async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, priceTier } = req.query;
     const conditions = [`status != 'Cancelled'`];
     const params = [];
     addDateConditions(conditions, params, startDate, endDate, 'createdAt');
+
+    if (priceTier && priceTier !== 'all') {
+      if (priceTier === 'Home') {
+        conditions.push(`(priceTier = 'Home' OR priceTier IS NULL OR priceTier = '')`);
+      } else {
+        conditions.push(`priceTier = ?`);
+        params.push(priceTier);
+      }
+    }
 
     const sales = await getPopulatedSales(conditions, params);
     res.json(sales);

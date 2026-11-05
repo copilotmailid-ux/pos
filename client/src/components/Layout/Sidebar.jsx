@@ -13,12 +13,14 @@ import {
   HiOutlineTruck,
   HiOutlineBriefcase,
   HiOutlineTrendingUp,
-  HiOutlineCog
+  HiOutlineCog,
+  HiOutlineDocumentText
 } from 'react-icons/hi';
 
 const navItems = [
   { to: '/billing', icon: HiOutlineShoppingCart, label: 'Billing (POS)' },
-  { to: '/', icon: HiOutlineViewGrid, label: 'Dashboard' },
+  { to: '/quotations', icon: HiOutlineDocumentText, label: 'Quotations' },
+  { to: '/dashboard', icon: HiOutlineViewGrid, label: 'Dashboard' },
   { to: '/products', icon: HiOutlineCube, label: 'Products' },
   { to: '/sales', icon: HiOutlineClipboardList, label: 'Sales History' },
   { to: '/customers', icon: HiOutlineUsers, label: 'Customers' },
@@ -64,7 +66,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     <>
       {isOpen && <div className="sidebar-overlay" onClick={onClose} />}
 
-      <aside className={`sidebar ${isOpen ? '' : 'sidebar--closed'}`}>
+      <aside className={`sidebar ${isOpen ? '' : 'sidebar--closed'} no-scrollbar`}>
         <div className="sidebar-header">
           <div className="sidebar-brand">
             <div className="sidebar-brand-icon">
@@ -85,7 +87,7 @@ const Sidebar = ({ isOpen, onClose }) => {
           <div className="sidebar-clock-date">{formattedDate}</div>
         </div>
 
-        <nav className="sidebar-nav">
+        <nav className="sidebar-nav no-scrollbar">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
@@ -114,6 +116,20 @@ const Sidebar = ({ isOpen, onClose }) => {
             <span className="icon"><HiOutlineLogout /></span>
             <span>Logout</span>
           </button>
+
+          {/* Developer & License Attribution */}
+          <div className="sidebar-attribution" style={{
+            marginTop: 6,
+            paddingTop: 6,
+            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+            textAlign: 'center',
+            fontSize: 10,
+            color: 'var(--slate-400)',
+            lineHeight: 1.3
+          }}>
+            <div>Developed by <strong style={{ color: '#ffffff' }}>devmoi</strong></div>
+            <div style={{ fontSize: 9, color: 'var(--slate-500)', marginTop: 2 }}>Commercial POS License • v2.0</div>
+          </div>
         </div>
       </aside>
     </>

@@ -30,6 +30,7 @@ const SalesHistory = () => {
   const [showActionsModal, setShowActionsModal] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
   const [showCancelPrompt, setShowCancelPrompt] = useState(false);
+  const [enableDeleteBillPassword, setEnableDeleteBillPassword] = useState(true);
   
   // Sales Return states
   const [showReturnPanel, setShowReturnPanel] = useState(false);
@@ -39,7 +40,14 @@ const SalesHistory = () => {
   const [submittingReturn, setSubmittingReturn] = useState(false);
   const [cancellingSale, setCancellingSale] = useState(false);
 
-  useEffect(() => { fetchSales(); }, [page]);
+  useEffect(() => { 
+    fetchSales(); 
+    api.get('/settings').then(({ data }) => {
+      if (data && data.enableDeleteBillPassword !== undefined) {
+        setEnableDeleteBillPassword(data.enableDeleteBillPassword !== false);
+      }
+    }).catch(() => {});
+  }, [page]);
 
   const fetchSales = async () => {
     try {
@@ -123,11 +131,13 @@ const SalesHistory = () => {
   // Submit Sales Cancellation
   const handleCancelSubmit = async (e) => {
     e.preventDefault();
-    const savedPassword = localStorage.getItem('pos_admin_delete_pass') || 'admin123';
-    
-    if (adminPasswordInput !== savedPassword) {
-      toast.error('Incorrect Admin Password! Cancellation blocked.');
-      return;
+    if (enableDeleteBillPassword) {
+      const savedPassword = localStorage.getItem('pos_admin_delete_pass') || 'admin123';
+      
+      if (adminPasswordInput !== savedPassword) {
+        toast.error('Incorrect Admin Password! Cancellation blocked.');
+        return;
+      }
     }
 
     setCancellingSale(true);
@@ -426,21 +436,35 @@ const SalesHistory = () => {
                       This will void the transaction, reset transaction amounts, and **restore stock** of all non-returned items to the inventory.
                     </p>
 
-                    <div className="form-group" style={{ marginBottom: 12 }}>
-                      <label style={{ fontSize: 10, fontWeight: 650, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <HiOutlineLockClosed /> Enter Admin Password
-                      </label>
-                      <input 
-                        type="password"
-                        className="form-input"
-                        style={{ padding: '6px 10px', fontSize: 12, height: 'auto' }}
-                        value={adminPasswordInput}
-                        onChange={(e) => setAdminPasswordInput(e.target.value)}
-                        placeholder="Admin password (Default: admin123)"
-                        required
-                        autoFocus
-                      />
-                    </div>
+                    {enableDeleteBillPassword ? (
+                      <div className="form-group" style={{ marginBottom: 12 }}>
+                        <label style={{ fontSize: 10, fontWeight: 650, display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <HiOutlineLockClosed /> Enter Admin Password
+                        </label>
+                        <input 
+                          type="password"
+                          className="form-input"
+                          style={{ padding: '6px 10px', fontSize: 12, height: 'auto' }}
+                          value={adminPasswordInput}
+                          onChange={(e) => setAdminPasswordInput(e.target.value)}
+                          placeholder="Admin password (Default: admin123)"
+                          required
+                          autoFocus
+                        />
+                      </div>
+                    ) : (
+                      <div style={{
+                        background: '#ecfdf5',
+                        border: '1px solid #a7f3d0',
+                        borderRadius: 6,
+                        padding: '8px 10px',
+                        marginBottom: 12,
+                        color: '#065f46',
+                        fontSize: 11
+                      }}>
+                        ⚡ Password check is disabled in Settings. Click below to confirm void.
+                      </div>
+                    )}
 
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button 
